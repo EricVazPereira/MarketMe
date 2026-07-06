@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="br.com.marketme.app"
-    android:versionCode="1"
-    android:versionName="0.1.0">
+    android:versionCode="2"
+    android:versionName="0.2.0">
 
-    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="29"/>
+    <!-- targetSdk 34 (Android 14): evita o aviso de "app feito para versão
+         antiga / sem proteções de privacidade" na instalação. O app já
+         cumpre as exigências: permissão de câmera em runtime, exported
+         explícito e assinatura v2. -->
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34"/>
 
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>
