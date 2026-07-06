@@ -1,0 +1,21 @@
+{
+  "name": "marketme",
+  "version": "0.1.0",
+  "description": "MarketMe — mini-mercado autônomo de condomínio (Fase 1: MVP scan & pay com Pix)",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "db:init": "node scripts/init-db.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "pg": "^8.13.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
