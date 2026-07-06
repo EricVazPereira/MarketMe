@@ -55,6 +55,28 @@ npm start               # ou: npm run dev (com reload)
 npm test
 ```
 
+### Esqueci a senha do postgres
+
+O `npm run db:setup` pede a senha do superusuário `postgres` (definida na
+instalação do PostgreSQL) só para criar o usuário/banco do MarketMe uma
+única vez. Se não lembrar essa senha (comum quando o PostgreSQL foi
+instalado há tempos), redefina-a — não apaga nenhum dado:
+
+1. Localize `pg_hba.conf` (Windows: normalmente em
+   `C:\Program Files\PostgreSQL\<versão>\data\pg_hba.conf`).
+2. Abra como Administrador e troque o método `scram-sha-256` (ou `md5`)
+   para `trust` nas linhas `host` com `127.0.0.1/32` e `::1/128`.
+3. Reinicie o serviço (`services.msc` → `postgresql-x64-...` → Reiniciar).
+4. Conecte sem senha e defina uma nova:
+   ```
+   psql -U postgres -h 127.0.0.1
+   ALTER USER postgres PASSWORD 'nova_senha_aqui';
+   \q
+   ```
+5. Reverta o `pg_hba.conf` para o método original e reinicie o serviço
+   de novo.
+6. Rode `npm run db:setup` e use `nova_senha_aqui`.
+
 ## Fluxo da compra (o coração do sistema)
 
 ```

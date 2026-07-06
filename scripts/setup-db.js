@@ -105,17 +105,35 @@ async function main() {
     'projeto — não reaproveita credenciais de outros bancos/sistemas ' +
     'que você tenha na mesma máquina (Firebird, outros projetos, etc.).',
   );
-  const superPass = await rl.question(
-    `\nSenha do superusuário "postgres" na porta ${port} (a definida na ` +
-    'instalação do PostgreSQL, necessária só para criar o usuário/banco ' +
-    'do MarketMe uma única vez): ',
-  );
-  const su = await tryConnect({
-    user: 'postgres', password: superPass.trim(), port, database: 'postgres',
-  });
-  if (typeof su === 'string') {
-    console.error(`Não conectou como postgres (${su}). Confira a senha e rode de novo.`);
-    process.exit(1);
+  const MAX_TRIES = 4;
+  let su;
+  for (let attempt = 1; attempt <= MAX_TRIES; attempt++) {
+    const superPass = await rl.question(
+      attempt === 1
+        ? `\nSenha do superusuário "postgres" na porta ${port} (a definida na ` +
+          'instalação do PostgreSQL, necessária só para criar o usuário/banco ' +
+          'do MarketMe uma única vez): '
+        : `Senha incorreta. Tente de novo (${attempt}/${MAX_TRIES}): `,
+    );
+    const result = await tryConnect({
+      user: 'postgres', password: superPass.trim(), port, database: 'postgres',
+    });
+    if (typeof result !== 'string') { su = result; break; }
+    if (result !== '28P01') {
+      // erro diferente de "senha incorreta" (ex.: postgres fora do ar) —
+      // tentar de novo não vai ajudar
+      console.error(`Não conectou como postgres (${result}).`);
+      process.exit(1);
+    }
+    if (attempt === MAX_TRIES) {
+      console.error(
+        '\nSenha incorreta em todas as tentativas.\n' +
+        'Se você não lembra a senha do usuário "postgres", é preciso ' +
+        'redefini-la (veja o README, seção "Esqueci a senha do postgres") ' +
+        'e rodar "npm run db:setup" de novo.',
+      );
+      process.exit(1);
+    }
   }
 
   const appPass = genPassword();
