@@ -5,6 +5,10 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.PSP_WEBHOOK_SECRET = 'segredo-de-teste';
+// A suíte inteira roda com autenticação básica ligada, para validar que
+// todas as rotas continuam funcionando com credenciais
+process.env.API_USER = 'admin-teste';
+process.env.API_PASS = 'senha-teste';
 
 const { initDb } = await import('../scripts/init-db.js');
 const { createApp } = await import('../src/app.js');
@@ -13,16 +17,24 @@ const { pool } = await import('../src/db.js');
 let server;
 let baseUrl;
 
+const AUTH =
+  'Basic ' + Buffer.from('admin-teste:senha-teste').toString('base64');
+
 const api = async (method, path, body, headers = {}) => {
   const res = await fetch(`${baseUrl}${path}`, {
     method,
-    headers: { 'content-type': 'application/json', ...headers },
+    headers: { 'content-type': 'application/json', authorization: AUTH, ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: res.status, body: await res.json() };
 };
+// o webhook NÃO envia usuário/senha de propósito: o PSP se autentica
+// apenas pelo segredo compartilhado (rota isenta da autenticação básica)
 const webhook = (body, secret = 'segredo-de-teste') =>
-  api('POST', '/webhooks/psp', body, { 'x-webhook-secret': secret });
+  api('POST', '/webhooks/psp', body, {
+    'x-webhook-secret': secret,
+    authorization: '',
+  });
 
 before(async () => {
   await initDb({ seed: true, reset: true });
@@ -40,7 +52,7 @@ const EAN = {
   doritos: '7892840812850', // qty 15, min 5, R$ 9,90
   biscoito: '7891079000021', // qty 5, min 4, R$ 4,50 → 1 venda dispara alerta
   papel: '7896004000501', // qty 8, min 2
-  banana: '2000000000017', // kg, qty 12.5, min 3, R$ 6,90/kg
+  banana: '2000001000000', // kg, qty 12.5, min 3, R$ 6,90/kg
 };
 
 test('catálogo da loja lista produtos com preço e disponibilidade', async () => {
@@ -277,4 +289,39 @@ test('encerra conta do cliente (soft-delete)', async () => {
 
   const missing = await api('POST', '/customers/9999/close');
   assert.equal(missing.status, 404);
+});
+
+test('autenticação básica: sem credenciais só passa /health e webhook', async () => {
+  const noAuth = await api('GET', '/stores/1/catalog', undefined, {
+    authorization: '',
+  });
+  assert.equal(noAuth.status, 401);
+
+  const wrong = await api('GET', '/stores/1/catalog', undefined, {
+    authorization: 'Basic ' + Buffer.from('x:y').toString('base64'),
+  });
+  assert.equal(wrong.status, 401);
+
+  const health = await api('GET', '/health', undefined, { authorization: '' });
+  assert.equal(health.status, 200);
+
+  // webhook com txid desconhecido responde 200 (sem basic auth) — a rota
+  // é isenta e autentica pelo segredo próprio
+  const wh = await webhook({ txid: 'INEXISTENTE', status: 'pago' });
+  assert.equal(wh.status, 200);
+  assert.equal(wh.body.known, false);
+});
+
+test('modo balança: prefixo resolve o produto pesável da loja', async () => {
+  // etiqueta "2000001 01500 d" → prefixo 2000001 (banana), 1,500 kg
+  const { status, body } = await api('GET', '/stores/1/products/scale/2000001');
+  assert.equal(status, 200);
+  assert.equal(body.ean, EAN.banana);
+  assert.equal(body.unit_type, 'kg');
+
+  const missing = await api('GET', '/stores/1/products/scale/2999999');
+  assert.equal(missing.status, 404);
+
+  const invalid = await api('GET', '/stores/1/products/scale/123');
+  assert.equal(invalid.status, 400);
 });

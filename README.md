@@ -15,6 +15,8 @@ Este repositório implementa a **Fase 1 (MVP funcional)** do roadmap:
 - ✅ Encerramento de conta do cliente (soft-delete)
 - ✅ Produtos vendidos por peso (hortifruti, açougue) — preço/kg, estoque
   fracionário e fluxo de pesagem no app
+- ✅ Autenticação básica opcional das APIs (usuário/senha via `.env`)
+- ✅ Modo balança: leitura do peso embutido na etiqueta EAN-13 da balança
 
 > Fora de escopo (decisão de produto): **não** haverá desenvolvimento de
 > IA/visão computacional para antifurto. Os demais itens das Fases 2 e 3
@@ -80,6 +82,7 @@ Regras críticas seguidas (seção 6 da pesquisa):
 | GET | `/stores` | Lojas ativas (seleção no app) |
 | GET | `/stores/:id/catalog` | Catálogo com preço/estoque da loja |
 | GET | `/stores/:id/products/ean/:ean` | Resolve EAN escaneado |
+| GET | `/stores/:id/products/scale/:prefix` | Modo balança: resolve o prefixo `2` + código (6 dígitos) da etiqueta para o produto pesável |
 | POST | `/orders` | Abre pedido (`{store_id, customer_id}`) |
 | POST | `/orders/:id/items` | Adiciona item (`{ean, qty?}`) — `qty` é contagem para produto por unidade, ou peso em kg para produto por peso |
 | DELETE | `/orders/:id/items/:productId` | Remove item do carrinho |
@@ -120,6 +123,35 @@ loja), `customer`, `orders`/`order_item`, `payment`, `stock_movement`
   `NUMERIC` para suportar peso fracionário (ex.: 1,500 kg).
 - `customer.status` (`ativo` | `encerrado`) é o soft-delete da conta.
 - `orders.status`/`payment.status` incluem `cancelado`.
+
+## Configuração
+
+Toda configuração sensível do sistema fica **no servidor**, no arquivo
+`.env` (veja [`.env.example`](./.env.example)):
+
+| Variável | O que configura |
+|---|---|
+| `DATABASE_URL` | Caminho/credenciais do banco PostgreSQL |
+| `PORT` | Porta da API |
+| `PIX_KEY`, `PIX_MERCHANT_*` | Dados do recebedor Pix (BR Code) |
+| `PSP_WEBHOOK_SECRET` | Segredo que autentica o webhook do PSP |
+| `API_USER`, `API_PASS` | Autenticação básica das APIs (opcional) |
+
+A tela de **Configurações do app** guarda apenas o que é do aparelho:
+endereço da API, usuário/senha da API (se habilitados no servidor),
+loja, cliente e **balança integrada (sim/não)**. O caminho do banco de
+dados fica de fora do app de propósito: o celular nunca fala com o
+PostgreSQL diretamente — expor essas credenciais em cada aparelho
+permitiria a qualquer morador ler o banco inteiro.
+
+### Modo balança
+
+Com **balança = sim**, o app interpreta etiquetas EAN-13 de balança no
+padrão brasileiro `2 CCCCCC WWWWW D` (prefixo `2`, código do produto,
+peso em gramas, dígito verificador): ao escanear, o peso vem da própria
+etiqueta e o item entra no carrinho sem perguntar nada. Com
+**balança = não** (padrão), o app abre um campo pedindo o peso em kg.
+Ex.: etiqueta `2000001015004` → produto `2000001` (banana), 1,500 kg.
 
 Esquema em [`db/schema.sql`](./db/schema.sql), dados de exemplo em
 [`db/seed.sql`](./db/seed.sql).

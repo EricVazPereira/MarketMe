@@ -14,6 +14,12 @@
     set storeName(v) { localStorage.setItem('mm.storeName', v); },
     get customerId() { return Number(localStorage.getItem('mm.customer')) || 0; },
     set customerId(v) { localStorage.setItem('mm.customer', v); },
+    get apiUser() { return localStorage.getItem('mm.apiUser') || ''; },
+    set apiUser(v) { localStorage.setItem('mm.apiUser', v); },
+    get apiPass() { return localStorage.getItem('mm.apiPass') || ''; },
+    set apiPass(v) { localStorage.setItem('mm.apiPass', v); },
+    get scale() { return localStorage.getItem('mm.scale') === '1'; },
+    set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
     get orderId() { return Number(localStorage.getItem('mm.order')) || 0; },
     set orderId(v) {
       if (v) localStorage.setItem('mm.order', v);
@@ -36,16 +42,22 @@
   // ---------- API ----------
   async function api(method, path, body) {
     if (!cfg.server) throw new Error('configure o endereço do servidor');
+    const headers = {};
+    if (body) headers['content-type'] = 'application/json';
+    if (cfg.apiUser)
+      headers.authorization = 'Basic ' + btoa(`${cfg.apiUser}:${cfg.apiPass}`);
     let res;
     try {
       res = await fetch(cfg.server + path, {
         method,
-        headers: body ? { 'content-type': 'application/json' } : undefined,
+        headers,
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch {
       throw new Error('sem conexão com o servidor');
     }
+    if (res.status === 401)
+      throw new Error('usuário/senha da API inválidos (veja Configurações)');
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `erro ${res.status}`);
     return data;
@@ -191,19 +203,36 @@
         <label>Endereço do servidor (API)</label>
         <input id="in-server" type="url" placeholder="http://192.168.0.10:3000"
                value="${esc(cfg.server)}" autocapitalize="off">
+        <label>Usuário da API (se o servidor exigir)</label>
+        <input id="in-api-user" type="text" autocapitalize="off"
+               placeholder="deixe vazio se não usar" value="${esc(cfg.apiUser)}">
+        <label>Senha da API</label>
+        <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
         <button id="btn-test" class="secondary" style="margin-top:12px">Buscar lojas</button>
         <label>Loja</label>
         <select id="in-store"><option value="">— busque as lojas acima —</option></select>
         <label>Nº do cliente (morador)</label>
         <input id="in-customer" type="number" min="1" value="${cfg.customerId || 1}">
+        <label>Balança integrada (etiqueta com peso no código de barras)</label>
+        <select id="in-scale">
+          <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
+          <option value="1" ${cfg.scale ? 'selected' : ''}>Sim — ler o peso da etiqueta da balança</option>
+        </select>
         <button id="btn-save" class="primary" style="margin-top:16px">Salvar e começar</button>
         ${firstRun ? '' : '<button id="btn-clear-order" class="link" style="margin-top:10px;width:100%">Abandonar carrinho atual</button>'}
       </div>
-      <p class="muted center">MarketMe v0.1 — mercado autônomo do seu condomínio</p>`;
+      <p class="muted center">MarketMe v0.1 — mercado autônomo do seu condomínio</p>
+      <p class="muted center" style="margin-top:6px">O banco de dados é configurado no
+        servidor (arquivo .env), nunca no app.</p>`;
 
     const storeSel = $('#in-store');
-    const loadStores = async () => {
+    const saveConn = () => {
       cfg.server = $('#in-server').value.trim();
+      cfg.apiUser = $('#in-api-user').value.trim();
+      cfg.apiPass = $('#in-api-pass').value;
+    };
+    const loadStores = async () => {
+      saveConn();
       try {
         const { stores } = await api('GET', '/stores');
         storeSel.innerHTML = stores
@@ -216,13 +245,14 @@
     if (cfg.server) loadStores();
 
     $('#btn-save').onclick = () => {
-      cfg.server = $('#in-server').value.trim();
+      saveConn();
       const opt = storeSel.selectedOptions[0];
       if (!cfg.server || !opt || !opt.value) return toast('Informe servidor e loja');
       if (Number(opt.value) !== cfg.storeId) cfg.orderId = 0;
       cfg.storeId = opt.value;
       cfg.storeName = opt.textContent;
       cfg.customerId = $('#in-customer').value || 1;
+      cfg.scale = $('#in-scale').value === '1';
       switchView('catalog');
     };
     const clearBtn = $('#btn-clear-order');
@@ -284,6 +314,18 @@
       if (ean === lastScan.ean && now - lastScan.at < 2500) return; // anti-duplo-scan
       lastScan = { ean, at: now };
       try {
+        // Modo balança: etiqueta EAN-13 "2 CCCCCC WWWWW D" — o peso em
+        // gramas vem impresso no próprio código, sem perguntar ao cliente
+        if (cfg.scale && /^2\d{12}$/.test(ean)) {
+          const prefix = ean.slice(0, 7);
+          const grams = Number(ean.slice(7, 12));
+          const product = await api(
+            'GET', `/stores/${cfg.storeId}/products/scale/${prefix}`,
+          );
+          if (grams > 0) await addByEan(product.ean, grams / 1000);
+          else openWeightModal(product); // etiqueta sem peso → pergunta
+          return;
+        }
         const product = await api('GET', `/stores/${cfg.storeId}/products/ean/${ean}`);
         if (product.unit_type === 'kg') openWeightModal(product);
         else await addByEan(ean);
