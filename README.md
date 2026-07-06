@@ -36,13 +36,15 @@ Este repositório implementa a **Fase 1 (MVP funcional)** do roadmap:
 npm install
 
 # 2. Banco — caminho automático (recomendado): encontra o PostgreSQL,
-#    cria usuário/banco se faltarem (sem tocar em outros projetos),
-#    grava o .env e cria as tabelas + dados de exemplo
+#    cria um usuário/banco EXCLUSIVOS do MarketMe com senha gerada
+#    automaticamente (não reaproveita credenciais de outros bancos ou
+#    sistemas que você já tenha, como Firebird), grava o .env e cria
+#    as tabelas + dados de exemplo
 npm run db:setup
 
 #    …ou caminho manual:
-#    cp .env.example .env  (ajuste DATABASE_URL)
-#    CREATE ROLE pointer LOGIN PASSWORD '...';  CREATE DATABASE marketme OWNER pointer;
+#    cp .env.example .env  (ajuste DATABASE_URL com SUAS credenciais)
+#    CREATE ROLE meu_usuario LOGIN PASSWORD 'minha_senha'; CREATE DATABASE marketme OWNER meu_usuario;
 #    npm run db:init          # cria esquema + dados de exemplo
 #    npm run db:init -- --reset  # recria do zero (apaga tudo!)
 

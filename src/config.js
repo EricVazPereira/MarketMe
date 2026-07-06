@@ -4,7 +4,7 @@ export const config = {
   port: Number(process.env.PORT ?? 3000),
   databaseUrl:
     process.env.DATABASE_URL ??
-    'postgres://pointer:sysadmin@localhost:5432/marketme',
+    'postgres://marketme_app:troque-esta-senha@localhost:5432/marketme',
   pix: {
     key: process.env.PIX_KEY ?? 'marketme@example.com',
     merchantName: process.env.PIX_MERCHANT_NAME ?? 'MARKETME',

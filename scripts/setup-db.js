@@ -3,25 +3,26 @@
 //
 // O que faz, nesta ordem:
 //   1. Procura instâncias do PostgreSQL nas portas comuns (5432-5435).
-//   2. Testa pointer/sysadmin em cada uma; se funcionar, usa essa.
-//   3. Se não funcionar em nenhuma, pede a senha do superusuário
-//      "postgres" e cria o usuário/banco que faltarem — sem alterar
-//      usuários existentes de outros projetos.
-//   4. Grava o DATABASE_URL correto no .env e cria as tabelas
-//      (e os dados de exemplo, apenas se o banco estiver vazio).
+//   2. Pede a senha do superusuário "postgres" da instância escolhida.
+//   3. Cria (ou reaproveita) um usuário exclusivo do MarketMe com senha
+//      gerada aleatoriamente — nunca reutiliza credenciais de outros
+//      sistemas/bancos que você tenha na mesma máquina.
+//   4. Grava o DATABASE_URL no .env e cria as tabelas (e os dados de
+//      exemplo, apenas se o banco estiver vazio).
 import net from 'node:net';
+import { randomBytes } from 'node:crypto';
 import { readFile, writeFile, access } from 'node:fs/promises';
 import { createInterface } from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
-const APP_USER = 'pointer';
-const APP_PASS = 'sysadmin';
+const APP_USER = 'marketme_app';
 const APP_DB = 'marketme';
 const PORTS = [5432, 5433, 5434, 5435];
 
 const root = (f) => fileURLToPath(new URL(`../${f}`, import.meta.url));
 const rl = createInterface({ input: process.stdin, output: process.stdout });
+const genPassword = () => randomBytes(18).toString('base64url');
 
 const portOpen = (port) =>
   new Promise((resolve) => {
@@ -72,7 +73,7 @@ async function writeEnv(url) {
     ? env.replace(/^DATABASE_URL=.*$/m, line)
     : `${line}\n${env}`;
   await writeFile(root('.env'), env);
-  console.log(`✔ .env atualizado: ${line}`);
+  console.log('✔ .env atualizado com a nova DATABASE_URL.');
 }
 
 async function main() {
@@ -86,54 +87,28 @@ async function main() {
     );
     process.exit(1);
   }
-  console.log(`Portas com PostgreSQL: ${open.join(', ')}`);
 
-  // 1) Alguma instância já aceita pointer/sysadmin?
-  for (const port of open) {
-    for (const database of [APP_DB, 'postgres']) {
-      const c = await tryConnect({ user: APP_USER, password: APP_PASS, port, database });
-      if (typeof c !== 'string') {
-        console.log(`✔ Usuário ${APP_USER} funciona na porta ${port}.`);
-        if (database !== APP_DB) {
-          // usuário ok, mas o banco marketme ainda não existe
-          const r = await c.query(
-            'SELECT 1 FROM pg_database WHERE datname = $1', [APP_DB]);
-          if (r.rowCount === 0) {
-            try {
-              await c.query(`CREATE DATABASE ${APP_DB} OWNER ${APP_USER}`);
-              console.log(`✔ Banco ${APP_DB} criado.`);
-            } catch {
-              await c.end();
-              console.log(`O usuário ${APP_USER} não pode criar bancos aqui; vou precisar do superusuário.`);
-              return superuserFlow(port);
-            }
-          }
-        }
-        await c.end();
-        const url = `postgres://${APP_USER}:${APP_PASS}@localhost:${port}/${APP_DB}`;
-        await writeEnv(url);
-        await ensureSchemaAndSeed(port, APP_USER, APP_PASS);
-        return done(port);
-      }
-    }
-  }
-
-  // 2) Nenhuma aceitou: escolher instância e usar o superusuário
   let port = open[0];
   if (open.length > 1) {
+    console.log(`Mais de uma instância de PostgreSQL encontrada: ${open.join(', ')}.`);
     const ans = await rl.question(
       `Em qual porta instalar o MarketMe? [${open.join('/')}] (Enter = ${open[0]}): `,
     );
     const n = Number(ans.trim());
     if (open.includes(n)) port = n;
+  } else {
+    console.log(`PostgreSQL encontrado na porta ${port}.`);
   }
-  return superuserFlow(port);
-}
 
-async function superuserFlow(port) {
-  console.log(`\nConfigurando via superusuário na porta ${port}.`);
+  console.log(
+    '\nO MarketMe usa um usuário e banco PRÓPRIOS, exclusivos deste ' +
+    'projeto — não reaproveita credenciais de outros bancos/sistemas ' +
+    'que você tenha na mesma máquina (Firebird, outros projetos, etc.).',
+  );
   const superPass = await rl.question(
-    'Senha do usuário "postgres" (a definida na instalação do PostgreSQL): ',
+    `\nSenha do superusuário "postgres" na porta ${port} (a definida na ` +
+    'instalação do PostgreSQL, necessária só para criar o usuário/banco ' +
+    'do MarketMe uma única vez): ',
   );
   const su = await tryConnect({
     user: 'postgres', password: superPass.trim(), port, database: 'postgres',
@@ -143,50 +118,38 @@ async function superuserFlow(port) {
     process.exit(1);
   }
 
-  let appUser = APP_USER;
+  const appPass = genPassword();
   const role = await su.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [APP_USER]);
   if (role.rowCount === 0) {
-    await su.query(`CREATE ROLE ${APP_USER} LOGIN PASSWORD '${APP_PASS}' CREATEDB`);
-    console.log(`✔ Usuário ${APP_USER} criado.`);
+    await su.query(`CREATE ROLE ${APP_USER} LOGIN PASSWORD '${appPass}' CREATEDB`);
+    console.log(`✔ Usuário ${APP_USER} criado (senha gerada automaticamente).`);
   } else {
-    // pointer existe com OUTRA senha — provavelmente é do seu outro
-    // projeto. Não mexemos nele: criamos um usuário só do MarketMe.
-    appUser = 'marketme_app';
-    const r2 = await su.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [appUser]);
-    if (r2.rowCount === 0) {
-      await su.query(`CREATE ROLE ${appUser} LOGIN PASSWORD '${APP_PASS}' CREATEDB`);
-    } else {
-      await su.query(`ALTER ROLE ${appUser} WITH LOGIN PASSWORD '${APP_PASS}'`);
-    }
-    console.log(
-      `⚠ O usuário ${APP_USER} já existe nesta instância com outra senha ` +
-      `(deve ser do seu outro projeto — não foi alterado).\n` +
-      `✔ Criado usuário exclusivo do MarketMe: ${appUser} (senha ${APP_PASS}).`,
-    );
+    await su.query(`ALTER ROLE ${APP_USER} WITH LOGIN PASSWORD '${appPass}'`);
+    console.log(`✔ Usuário ${APP_USER} já existia; senha renovada.`);
   }
 
   const db = await su.query('SELECT 1 FROM pg_database WHERE datname = $1', [APP_DB]);
   if (db.rowCount === 0) {
-    await su.query(`CREATE DATABASE ${APP_DB} OWNER ${appUser}`);
-    console.log(`✔ Banco ${APP_DB} criado (dono: ${appUser}).`);
+    await su.query(`CREATE DATABASE ${APP_DB} OWNER ${APP_USER}`);
+    console.log(`✔ Banco ${APP_DB} criado (dono: ${APP_USER}).`);
   } else {
-    await su.query(`ALTER DATABASE ${APP_DB} OWNER TO ${appUser}`);
-    console.log(`✔ Banco ${APP_DB} já existia; dono ajustado para ${appUser}.`);
+    await su.query(`ALTER DATABASE ${APP_DB} OWNER TO ${APP_USER}`);
+    console.log(`✔ Banco ${APP_DB} já existia; dono ajustado para ${APP_USER}.`);
   }
   await su.end();
 
-  const url = `postgres://${appUser}:${APP_PASS}@localhost:${port}/${APP_DB}`;
+  const url = `postgres://${APP_USER}:${appPass}@localhost:${port}/${APP_DB}`;
   await writeEnv(url);
-  await ensureSchemaAndSeed(port, appUser, APP_PASS);
-  return done(port);
+  await ensureSchemaAndSeed(port, APP_USER, appPass);
+  done(port);
 }
 
 function done(port) {
   rl.close();
   console.log(
     `\nPronto! Banco do MarketMe configurado na porta ${port}.\n` +
-    'Agora rode: npm start\n' +
-    '(seu outro projeto e o banco dele não foram tocados)',
+    'A senha gerada ficou salva apenas no .env (não precisa memorizá-la).\n' +
+    'Agora rode: npm start',
   );
 }
 
