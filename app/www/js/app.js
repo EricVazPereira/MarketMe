@@ -235,10 +235,18 @@
       saveConn();
       try {
         const { stores } = await api('GET', '/stores');
+        if (stores.length === 0) {
+          storeSel.innerHTML = '<option value="">— nenhuma loja cadastrada —</option>';
+          toast('Nenhuma loja no banco. No servidor, rode: npm run db:init');
+          return;
+        }
+        // Operação com uma loja só (caso comum): seleciona automaticamente
         storeSel.innerHTML = stores
-          .map((s) => `<option value="${s.id}" ${s.id === cfg.storeId ? 'selected' : ''}>${esc(s.name)}</option>`)
+          .map((s) => `<option value="${s.id}" ${s.id === cfg.storeId || stores.length === 1 ? 'selected' : ''}>${esc(s.name)}</option>`)
           .join('');
-        toast(`${stores.length} loja(s) encontrada(s)`);
+        toast(stores.length === 1
+          ? `Loja "${stores[0].name}" selecionada`
+          : `${stores.length} loja(s) encontrada(s)`);
       } catch (e) { toast(`Erro: ${e.message}`); }
     };
     $('#btn-test').onclick = loadStores;
