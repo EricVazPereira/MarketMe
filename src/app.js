@@ -10,6 +10,15 @@ export function createApp() {
   const app = express();
   app.use(express.json());
 
+  // CORS liberado: o app Android/PWA acessa a API de outra origem
+  app.use((req, res, next) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'content-type,x-webhook-secret');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+
   app.get('/health', (_req, res) => res.json({ ok: true }));
 
   app.use(catalogRouter);

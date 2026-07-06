@@ -4,6 +4,18 @@ import { notFound, wrap } from '../errors.js';
 
 export const catalogRouter = Router();
 
+// Lojas ativas (o app usa para o morador escolher a sua)
+catalogRouter.get(
+  '/stores',
+  wrap(async (_req, res) => {
+    const { rows } = await query(
+      `SELECT id, name, condo_id, address FROM store
+        WHERE status = 'ativa' ORDER BY name`,
+    );
+    res.json({ stores: rows });
+  }),
+);
+
 // Catálogo da loja: produtos com preço e disponibilidade daquela unidade
 catalogRouter.get(
   '/stores/:storeId/catalog',

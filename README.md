@@ -124,6 +124,32 @@ curl -X POST localhost:3000/webhooks/psp \
   -d '{"txid": "<psp_txid>", "status": "pago"}'
 ```
 
+## App Android (cliente scan & pay)
+
+O diretório [`app/`](./app) contém o app do morador: uma SPA (HTML/JS)
+que escaneia código de barras pela câmera, monta o carrinho e paga com
+Pix copia-e-cola, embarcada em um APK Android via WebView nativo.
+
+- **APK pronto:** [`app/releases/marketme-debug.apk`](./app/releases/marketme-debug.apk)
+  (minSdk 23 / Android 6+, assinatura de debug — instale habilitando
+  "fontes desconhecidas")
+- **Primeiro uso:** abra o app → informe o endereço da API
+  (ex.: `http://192.168.0.10:3000`, o IP da máquina que roda o backend,
+  na mesma rede Wi-Fi) → toque em "Buscar lojas" → escolha a loja → salvar.
+- **Recompilar o APK** (Linux, sem Gradle/Android Studio — usa as
+  ferramentas do SDK empacotadas pelo Debian/Ubuntu):
+
+```bash
+sudo apt install android-sdk-build-tools android-sdk-platform-23 \
+                 apksigner zipalign dalvik-exchange default-jdk
+cd app && npm install && npm run build:apk
+# → app/android/build/marketme-debug.apk
+```
+
+> Nota: o app usa WebView + `file://` com acesso universal liberado e
+> tráfego HTTP em texto claro — adequado para o MVP em rede local. Antes
+> de produção: servir a API via HTTPS e restringir essas permissões.
+
 ## Próximos passos (Fase 2)
 
 - Cadastro/autenticação de moradores (hoje os clientes vêm do seed)

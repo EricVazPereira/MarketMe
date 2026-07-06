@@ -1,0 +1,13 @@
+{
+  "name": "marketme-app",
+  "version": "0.1.0",
+  "description": "MarketMe — app do cliente (scan & pay) empacotado como APK Android",
+  "private": true,
+  "scripts": {
+    "sync-vendor": "cp node_modules/html5-qrcode/html5-qrcode.min.js www/vendor/",
+    "build:apk": "bash android/build.sh"
+  },
+  "dependencies": {
+    "html5-qrcode": "^2.3.8"
+  }
+}

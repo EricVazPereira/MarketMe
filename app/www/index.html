@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#0d7a4f">
+  <title>MarketMe</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header id="topbar">
+    <button id="btn-back" class="icon-btn hidden" aria-label="Voltar">&#8592;</button>
+    <h1 id="title">MarketMe</h1>
+    <button id="btn-settings" class="icon-btn" aria-label="Configurações">&#9881;</button>
+  </header>
+
+  <main id="view"></main>
+
+  <nav id="tabbar">
+    <button data-view="catalog" class="tab active">🏪<span>Loja</span></button>
+    <button data-view="scan" class="tab">📷<span>Escanear</span></button>
+    <button data-view="cart" class="tab">🛒<span>Carrinho<b id="cart-badge" class="hidden">0</b></span></button>
+  </nav>
+
+  <div id="toast" class="hidden"></div>
+
+  <script src="vendor/html5-qrcode.min.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
