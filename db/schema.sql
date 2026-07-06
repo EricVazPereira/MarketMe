@@ -21,16 +21,19 @@ CREATE TABLE IF NOT EXISTS product (
   category      TEXT,
   image_url     TEXT,
   default_price NUMERIC(10,2) NOT NULL CHECK (default_price >= 0),
+  -- 'un' = vendido por unidade; 'kg' = vendido por peso (hortifruti, açougue, padaria)
+  unit_type     TEXT NOT NULL DEFAULT 'un' CHECK (unit_type IN ('un', 'kg')),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Preço e estoque são POR LOJA, não globais (regra crítica da pesquisa)
+-- Preço e estoque são POR LOJA, não globais (regra crítica da pesquisa).
+-- qty/min_qty em NUMERIC para suportar peso fracionário (ex.: 1,500 kg).
 CREATE TABLE IF NOT EXISTS store_product (
   store_id   INTEGER NOT NULL REFERENCES store(id),
   product_id INTEGER NOT NULL REFERENCES product(id),
   price      NUMERIC(10,2) NOT NULL CHECK (price >= 0),
-  qty        INTEGER NOT NULL DEFAULT 0,
-  min_qty    INTEGER NOT NULL DEFAULT 0 CHECK (min_qty >= 0),
+  qty        NUMERIC(10,3) NOT NULL DEFAULT 0,
+  min_qty    NUMERIC(10,3) NOT NULL DEFAULT 0 CHECK (min_qty >= 0),
   PRIMARY KEY (store_id, product_id)
 );
 
@@ -40,6 +43,7 @@ CREATE TABLE IF NOT EXISTS customer (
   phone      TEXT,
   email      TEXT UNIQUE,
   condo_id   TEXT,
+  status     TEXT NOT NULL DEFAULT 'ativo' CHECK (status IN ('ativo', 'encerrado')),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -57,7 +61,7 @@ CREATE TABLE IF NOT EXISTS orders (
 CREATE TABLE IF NOT EXISTS order_item (
   order_id   INTEGER NOT NULL REFERENCES orders(id),
   product_id INTEGER NOT NULL REFERENCES product(id),
-  qty        INTEGER NOT NULL CHECK (qty > 0),
+  qty        NUMERIC(10,3) NOT NULL CHECK (qty > 0),
   unit_price NUMERIC(10,2) NOT NULL CHECK (unit_price >= 0),
   PRIMARY KEY (order_id, product_id)
 );
@@ -81,7 +85,7 @@ CREATE TABLE IF NOT EXISTS stock_movement (
   store_id   INTEGER NOT NULL REFERENCES store(id),
   product_id INTEGER NOT NULL REFERENCES product(id),
   type       TEXT NOT NULL CHECK (type IN ('sale', 'restock', 'loss', 'adjustment')),
-  qty        INTEGER NOT NULL,
+  qty        NUMERIC(10,3) NOT NULL,
   reason     TEXT,
   order_id   INTEGER REFERENCES orders(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()

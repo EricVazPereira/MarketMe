@@ -4,6 +4,7 @@ import { ordersRouter } from './routes/orders.js';
 import { webhooksRouter } from './routes/webhooks.js';
 import { stockRouter } from './routes/stock.js';
 import { dashboardRouter } from './routes/dashboard.js';
+import { customersRouter } from './routes/customers.js';
 import { HttpError } from './errors.js';
 
 export function createApp() {
@@ -26,6 +27,7 @@ export function createApp() {
   app.use(webhooksRouter);
   app.use(stockRouter);
   app.use(dashboardRouter);
+  app.use(customersRouter);
 
   app.use((_req, res) => res.status(404).json({ error: 'rota não encontrada' }));
 

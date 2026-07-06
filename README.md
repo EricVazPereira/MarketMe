@@ -11,6 +11,10 @@ Este repositório implementa a **Fase 1 (MVP funcional)** do roadmap:
 - ✅ Baixa de estoque **atômica** na confirmação do pagamento
 - ✅ Alerta de estoque mínimo + lista de reposição + registro de inventário
 - ✅ Dashboard simples por loja (faturamento, ticket médio, top produtos)
+- ✅ Cancelamento de pedido/carrinho (com cancelamento da cobrança Pix)
+- ✅ Encerramento de conta do cliente (soft-delete)
+- ✅ Produtos vendidos por peso (hortifruti, açougue) — preço/kg, estoque
+  fracionário e fluxo de pesagem no app
 
 > Fora de escopo (decisão de produto): **não** haverá desenvolvimento de
 > IA/visão computacional para antifurto. Os demais itens das Fases 2 e 3
@@ -73,13 +77,16 @@ Regras críticas seguidas (seção 6 da pesquisa):
 
 | Método | Rota | Descrição |
 |---|---|---|
+| GET | `/stores` | Lojas ativas (seleção no app) |
 | GET | `/stores/:id/catalog` | Catálogo com preço/estoque da loja |
 | GET | `/stores/:id/products/ean/:ean` | Resolve EAN escaneado |
 | POST | `/orders` | Abre pedido (`{store_id, customer_id}`) |
-| POST | `/orders/:id/items` | Adiciona item (`{ean, qty?}`) |
+| POST | `/orders/:id/items` | Adiciona item (`{ean, qty?}`) — `qty` é contagem para produto por unidade, ou peso em kg para produto por peso |
 | DELETE | `/orders/:id/items/:productId` | Remove item do carrinho |
+| POST | `/orders/:id/cancel` | Cancela pedido aberto (e a cobrança Pix pendente) |
 | POST | `/orders/:id/pay` | Gera cobrança Pix dinâmica |
 | GET | `/orders/:id` | Status do pedido (polling do app) |
+| POST | `/customers/:id/close` | Encerra a conta do cliente (soft-delete; recusa se houver pedido aberto) |
 
 ### Integração PSP
 
@@ -107,6 +114,12 @@ Núcleo da seção 5 da pesquisa (sem `theft_alert` e `payout`, que são de
 fases futuras): `store`, `product`, `store_product` (preço/estoque por
 loja), `customer`, `orders`/`order_item`, `payment`, `stock_movement`
 (todo movimento — venda, reposição, quebra, ajuste — fica auditável).
+
+- `product.unit_type` (`un` | `kg`) diferencia produto por unidade de
+  produto por peso; `store_product.qty`/`min_qty` e `order_item.qty` são
+  `NUMERIC` para suportar peso fracionário (ex.: 1,500 kg).
+- `customer.status` (`ativo` | `encerrado`) é o soft-delete da conta.
+- `orders.status`/`payment.status` incluem `cancelado`.
 
 Esquema em [`db/schema.sql`](./db/schema.sql), dados de exemplo em
 [`db/seed.sql`](./db/seed.sql).

@@ -40,15 +40,20 @@ const EAN = {
   doritos: '7892840812850', // qty 15, min 5, R$ 9,90
   biscoito: '7891079000021', // qty 5, min 4, R$ 4,50 → 1 venda dispara alerta
   papel: '7896004000501', // qty 8, min 2
+  banana: '2000000000017', // kg, qty 12.5, min 3, R$ 6,90/kg
 };
 
 test('catálogo da loja lista produtos com preço e disponibilidade', async () => {
   const { status, body } = await api('GET', '/stores/1/catalog');
   assert.equal(status, 200);
-  assert.equal(body.products.length, 8);
+  assert.equal(body.products.length, 10);
   const coca = body.products.find((p) => p.ean === EAN.coca);
   assert.equal(coca.price, 5.5);
   assert.equal(coca.available, 24);
+  assert.equal(coca.unit_type, 'un');
+  const banana = body.products.find((p) => p.ean === EAN.banana);
+  assert.equal(banana.unit_type, 'kg');
+  assert.equal(banana.available, 12.5);
 });
 
 test('scan de EAN resolve produto na loja', async () => {
@@ -182,4 +187,94 @@ test('inventário ajusta estoque e registra a diferença', async () => {
   assert.equal(body.adjustments[0].delta, 10 - doritos.body.available);
   const after = await api('GET', `/stores/1/products/ean/${EAN.doritos}`);
   assert.equal(after.body.available, 10);
+});
+
+test('produto pesável: compra por peso baixa estoque em kg', async () => {
+  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
+  const orderId = order.body.id;
+
+  const add = await api('POST', `/orders/${orderId}/items`, {
+    ean: EAN.banana,
+    qty: 1.5,
+  });
+  assert.equal(add.status, 201);
+  const item = add.body.items.find((i) => i.ean === EAN.banana);
+  assert.equal(item.unit_type, 'kg');
+  assert.equal(item.qty, 1.5);
+  assert.equal(item.subtotal, 10.35);
+
+  const pay = await api('POST', `/orders/${orderId}/pay`);
+  const wh = await webhook({ txid: pay.body.psp_txid, status: 'pago' });
+  assert.equal(wh.body.order_status, 'concluido');
+
+  const banana = await api('GET', `/stores/1/products/ean/${EAN.banana}`);
+  assert.equal(banana.body.available, 12.5 - 1.5);
+});
+
+test('produto por unidade rejeita peso fracionário', async () => {
+  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
+  const { status, body } = await api('POST', `/orders/${order.body.id}/items`, {
+    ean: EAN.coca,
+    qty: 1.5,
+  });
+  assert.equal(status, 400);
+  assert.match(body.error, /unidade/);
+});
+
+test('cancela pedido aberto e a cobrança Pix pendente', async () => {
+  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
+  const orderId = order.body.id;
+  await api('POST', `/orders/${orderId}/items`, { ean: EAN.coca, qty: 1 });
+  const pay = await api('POST', `/orders/${orderId}/pay`);
+  const txid = pay.body.psp_txid;
+
+  const cancel = await api('POST', `/orders/${orderId}/cancel`);
+  assert.equal(cancel.status, 200);
+  assert.equal(cancel.body.status, 'cancelado');
+
+  const check = await api('GET', `/orders/${orderId}`);
+  assert.equal(check.body.status, 'cancelado');
+  assert.equal(check.body.payments[0].status, 'cancelado');
+
+  // pedido cancelado não aceita mais itens
+  const addAfter = await api('POST', `/orders/${orderId}/items`, { ean: EAN.coca });
+  assert.equal(addAfter.status, 409);
+
+  // não pode cancelar de novo
+  const cancelAgain = await api('POST', `/orders/${orderId}/cancel`);
+  assert.equal(cancelAgain.status, 409);
+
+  // um webhook atrasado do PSP não revive o pedido cancelado
+  const wh = await webhook({ txid, status: 'pago' });
+  assert.equal(wh.body.duplicate, true);
+  const stillCancelled = await api('GET', `/orders/${orderId}`);
+  assert.equal(stillCancelled.body.status, 'cancelado');
+});
+
+test('encerra conta do cliente (soft-delete)', async () => {
+  // usa o cliente 1: seu único pedido em testes anteriores já foi concluído,
+  // então ele começa esta suíte sem carrinhos abertos pendentes.
+  const openOrder = await api('POST', '/orders', { store_id: 1, customer_id: 1 });
+
+  const blocked = await api('POST', '/customers/1/close');
+  assert.equal(blocked.status, 409);
+  assert.match(blocked.body.error, /pedido em aberto/);
+
+  await api('POST', `/orders/${openOrder.body.id}/cancel`);
+
+  const closed = await api('POST', '/customers/1/close');
+  assert.equal(closed.status, 200);
+  assert.equal(closed.body.status, 'encerrado');
+
+  // idempotente: encerrar de novo não dá erro
+  const closedAgain = await api('POST', '/customers/1/close');
+  assert.equal(closedAgain.status, 200);
+  assert.equal(closedAgain.body.status, 'encerrado');
+
+  // conta encerrada não consegue abrir pedido novo
+  const newOrder = await api('POST', '/orders', { store_id: 1, customer_id: 1 });
+  assert.equal(newOrder.status, 404);
+
+  const missing = await api('POST', '/customers/9999/close');
+  assert.equal(missing.status, 404);
 });

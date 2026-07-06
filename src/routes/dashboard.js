@@ -32,14 +32,14 @@ dashboardRouter.get(
     );
 
     const { rows: topProducts } = await query(
-      `SELECT p.id AS product_id, p.ean, p.name,
-              SUM(oi.qty)::int AS units_sold,
+      `SELECT p.id AS product_id, p.ean, p.name, p.unit_type,
+              SUM(oi.qty)::float AS units_sold,
               SUM(oi.qty * oi.unit_price)::float AS revenue
          FROM order_item oi
          JOIN orders o ON o.id = oi.order_id
          JOIN product p ON p.id = oi.product_id
         WHERE o.store_id = $1 AND o.status = 'concluido' AND ${period}
-        GROUP BY p.id, p.ean, p.name
+        GROUP BY p.id, p.ean, p.name, p.unit_type
         ORDER BY units_sold DESC, revenue DESC
         LIMIT 10`,
       [storeId, from ?? null, to ?? null],

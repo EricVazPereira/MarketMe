@@ -14,19 +14,27 @@ INSERT INTO product (ean, name, category, default_price) VALUES
   ('7891991010931', 'Cerveja Heineken Long Neck 330ml','Bebidas',    8.50),
   ('7896004000501', 'Papel Higiênico Neve 4un',        'Higiene',   12.90);
 
+-- Produtos vendidos por peso (hortifruti). EAN 2xxxxxxxxxxxx é a faixa
+-- padrão usada por balanças de loja para itens pesáveis no Brasil.
+INSERT INTO product (ean, name, category, default_price, unit_type) VALUES
+  ('2000000000017', 'Banana Prata (kg)',  'Hortifruti', 6.90, 'kg'),
+  ('2000000000024', 'Tomate Salada (kg)', 'Hortifruti', 8.50, 'kg');
+
 -- Estoque e preço da loja 1 (biscoito já perto do mínimo p/ testar alerta)
 INSERT INTO store_product (store_id, product_id, price, qty, min_qty)
 SELECT 1, p.id, p.default_price, v.qty, v.min_qty
 FROM product p
 JOIN (VALUES
-  ('7894900011517', 24, 6),
-  ('7891000100103', 12, 4),
-  ('7891910000197', 10, 3),
-  ('7896036090244', 10, 3),
-  ('7891079000021',  5, 4),
-  ('7892840812850', 15, 5),
-  ('7891991010931', 30, 8),
-  ('7896004000501',  8, 2)
+  ('7894900011517', 24,     6),
+  ('7891000100103', 12,     4),
+  ('7891910000197', 10,     3),
+  ('7896036090244', 10,     3),
+  ('7891079000021',  5,     4),
+  ('7892840812850', 15,     5),
+  ('7891991010931', 30,     8),
+  ('7896004000501',  8,     2),
+  ('2000000000017', 12.500, 3.000),
+  ('2000000000024',  8.750, 2.000)
 ) AS v(ean, qty, min_qty) ON v.ean = p.ean;
 
 INSERT INTO customer (name, phone, email, condo_id) VALUES

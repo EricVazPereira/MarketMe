@@ -18,7 +18,7 @@ async function loadOrder(orderId, client = { query }) {
 
 async function orderItems(orderId) {
   const { rows } = await query(
-    `SELECT oi.product_id, p.ean, p.name, oi.qty,
+    `SELECT oi.product_id, p.ean, p.name, p.unit_type, oi.qty::float AS qty,
             oi.unit_price::float AS unit_price,
             (oi.qty * oi.unit_price)::float AS subtotal
        FROM order_item oi
@@ -43,10 +43,12 @@ ordersRouter.post(
       [store_id],
     );
     if (store.rowCount === 0) throw notFound('loja não encontrada ou inativa');
-    const customer = await query(`SELECT id FROM customer WHERE id = $1`, [
-      customer_id,
-    ]);
-    if (customer.rowCount === 0) throw notFound('cliente não encontrado');
+    const customer = await query(
+      `SELECT id FROM customer WHERE id = $1 AND status = 'ativo'`,
+      [customer_id],
+    );
+    if (customer.rowCount === 0)
+      throw notFound('cliente não encontrado ou conta encerrada');
 
     const { rows } = await query(
       `INSERT INTO orders (store_id, customer_id)
@@ -58,16 +60,18 @@ ordersRouter.post(
   }),
 );
 
-// Scan de EAN: adiciona (ou incrementa) item no carrinho
+// Scan de EAN: adiciona (ou incrementa) item no carrinho.
+// Para produtos por unidade, qty é a contagem (inteiro >= 1).
+// Para produtos por peso (unit_type = 'kg'), qty é o peso em kg (ex.: 0.5).
 ordersRouter.post(
   '/orders/:orderId/items',
   wrap(async (req, res) => {
     const { orderId } = req.params;
     const { ean, qty = 1 } = req.body ?? {};
     if (!ean) throw badRequest('ean é obrigatório');
-    const addQty = Number(qty);
-    if (!Number.isInteger(addQty) || addQty < 1)
-      throw badRequest('qty deve ser inteiro >= 1');
+    const rawQty = Number(qty);
+    if (!Number.isFinite(rawQty) || rawQty <= 0)
+      throw badRequest('qty deve ser um número > 0');
 
     const order = await withTransaction(async (client) => {
       const ord = await loadOrder(orderId, client);
@@ -75,7 +79,8 @@ ordersRouter.post(
         throw conflict(`pedido não está aberto (status: ${ord.status})`);
 
       const { rows: found } = await client.query(
-        `SELECT sp.product_id, sp.price, sp.qty AS available
+        `SELECT sp.product_id, sp.price::float AS price, sp.qty::float AS available,
+                p.unit_type
            FROM store_product sp
            JOIN product p ON p.id = sp.product_id
           WHERE sp.store_id = $1 AND p.ean = $2
@@ -84,14 +89,19 @@ ordersRouter.post(
       );
       if (found.length === 0)
         throw notFound('produto não disponível nesta loja');
-      const { product_id, price, available } = found[0];
+      const { product_id, price, available, unit_type } = found[0];
+
+      if (unit_type === 'un' && !Number.isInteger(rawQty))
+        throw badRequest('este produto é vendido por unidade; qty deve ser inteiro');
+      const addQty = rawQty;
 
       const { rows: existing } = await client.query(
-        `SELECT qty FROM order_item WHERE order_id = $1 AND product_id = $2`,
+        `SELECT qty::float AS qty FROM order_item WHERE order_id = $1 AND product_id = $2`,
         [orderId, product_id],
       );
       const inCart = existing.length > 0 ? existing[0].qty : 0;
-      if (inCart + addQty > available)
+      const EPS = 1e-9;
+      if (inCart + addQty > available + EPS)
         throw conflict(
           `estoque insuficiente (disponível: ${available}, no carrinho: ${inCart})`,
         );
@@ -141,6 +151,36 @@ ordersRouter.delete(
       return loadOrder(orderId, client);
     });
     res.json({ ...order, items: await orderItems(orderId) });
+  }),
+);
+
+// Cancela um pedido aberto e a cobrança Pix pendente associada, se houver.
+// A checagem final é condicional (WHERE status = 'aberto') para não
+// sobrescrever um pedido que a confirmação do PSP tenha concluído
+// concorrentemente enquanto o cliente cancelava.
+ordersRouter.post(
+  '/orders/:orderId/cancel',
+  wrap(async (req, res) => {
+    const { orderId } = req.params;
+    const order = await withTransaction(async (client) => {
+      const ord = await loadOrder(orderId, client);
+      if (ord.status !== 'aberto')
+        throw conflict(`só é possível cancelar pedido aberto (status: ${ord.status})`);
+
+      await client.query(
+        `UPDATE payment SET status = 'cancelado'
+          WHERE order_id = $1 AND status = 'pendente'`,
+        [orderId],
+      );
+      const { rowCount } = await client.query(
+        `UPDATE orders SET status = 'cancelado' WHERE id = $1 AND status = 'aberto'`,
+        [orderId],
+      );
+      if (rowCount === 0)
+        throw conflict('pedido foi confirmado por um pagamento durante o cancelamento');
+      return loadOrder(orderId, client);
+    });
+    res.json({ ...order, items: await orderItems(order.id) });
   }),
 );
 

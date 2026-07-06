@@ -63,9 +63,32 @@
 
   function setTitle(t) { $('#title').textContent = t; }
 
+  // Modal em HTML puro: o WebView do APK não trata window.alert/confirm/
+  // prompt (WebChromeClient não os sobrescreve), então essas chamadas
+  // nativas não exibem nada — toda confirmação usa este overlay.
+  function openModal(html) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `<div class="modal-card">${html}</div>`;
+    document.body.appendChild(overlay);
+    return overlay;
+  }
+  const closeModal = (overlay) => overlay.remove();
+
+  function formatPrice(p) {
+    return p.unit_type === 'kg' ? `${money(p.price)}/kg` : money(p.price);
+  }
+  function formatAvailable(p) {
+    return p.unit_type === 'kg'
+      ? `${Number(p.available).toFixed(3)} kg disponíveis`
+      : `${p.available} disponíveis`;
+  }
+
   function updateBadge(order) {
+    // conta produtos distintos no carrinho, não a soma das quantidades —
+    // somar unidades com quilos (produto pesável) não faria sentido
     const badge = $('#cart-badge');
-    const count = (order?.items || []).reduce((s, i) => s + i.qty, 0);
+    const count = (order?.items || []).length;
     badge.textContent = count;
     badge.classList.toggle('hidden', count === 0);
   }
@@ -109,14 +132,53 @@
     } catch { cfg.orderId = 0; return null; }
   }
 
-  async function addByEan(ean) {
+  async function addByEan(ean, qty = 1) {
     const order = await ensureOrder();
-    const updated = await api('POST', `/orders/${order.id}/items`, { ean });
+    const updated = await api('POST', `/orders/${order.id}/items`, { ean, qty });
     updateBadge(updated);
     const item = updated.items.find((i) => i.ean === ean);
     if (navigator.vibrate) navigator.vibrate(80);
     toast(`✔ ${item ? item.name : 'item'} — total ${money(updated.total)}`);
     return updated;
+  }
+
+  async function cancelOrder(orderId) {
+    await api('POST', `/orders/${orderId}/cancel`);
+    stopPolling();
+    cfg.orderId = 0;
+    updateBadge(null);
+    toast('Pedido cancelado');
+    switchView('catalog');
+  }
+
+  function confirmCancelOrder(orderId) {
+    const overlay = openModal(`
+      <h3>Cancelar pedido?</h3>
+      <p class="muted">Os itens do carrinho serão descartados.</p>
+      <button id="modal-confirm" class="primary" style="background:var(--danger);margin-top:14px">Sim, cancelar</button>
+      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
+    overlay.querySelector('#modal-confirm').onclick = async () => {
+      closeModal(overlay);
+      try { await cancelOrder(orderId); } catch (e) { toast(`⚠️ ${e.message}`); }
+    };
+    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
+  }
+
+  function openWeightModal(product) {
+    const overlay = openModal(`
+      <h3>${esc(product.name)}</h3>
+      <p class="muted">${money(product.price)} / kg</p>
+      <label>Peso (kg)</label>
+      <input id="modal-weight" type="number" inputmode="decimal" step="0.001" min="0.001" value="0.500">
+      <button id="modal-confirm" class="primary" style="margin-top:14px">Adicionar ao carrinho</button>
+      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Cancelar</button>`);
+    overlay.querySelector('#modal-confirm').onclick = async () => {
+      const weight = Number(overlay.querySelector('#modal-weight').value);
+      if (!(weight > 0)) return toast('Informe um peso válido');
+      closeModal(overlay);
+      try { await addByEan(product.ean, weight); } catch (e) { toast(`⚠️ ${e.message}`); }
+    };
+    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
   }
 
   // ---------- telas ----------
@@ -188,9 +250,9 @@
             <div class="card row">
               <div class="grow">
                 <div>${esc(p.name)}</div>
-                <div class="muted">${p.available > 0 ? `${p.available} disponíveis` : 'esgotado'}</div>
+                <div class="muted">${p.available > 0 ? formatAvailable(p) : 'esgotado'}</div>
               </div>
-              <span class="price">${money(p.price)}</span>
+              <span class="price">${formatPrice(p)}</span>
             </div>`).join('')}`)
         .join('') || '<p class="center muted" style="padding:30px">Catálogo vazio</p>';
     } catch (e) {
@@ -221,7 +283,11 @@
       const now = Date.now();
       if (ean === lastScan.ean && now - lastScan.at < 2500) return; // anti-duplo-scan
       lastScan = { ean, at: now };
-      try { await addByEan(ean); } catch (e) { toast(`⚠️ ${e.message}`); }
+      try {
+        const product = await api('GET', `/stores/${cfg.storeId}/products/ean/${ean}`);
+        if (product.unit_type === 'kg') openWeightModal(product);
+        else await addByEan(ean);
+      } catch (e) { toast(`⚠️ ${e.message}`); }
     };
 
     $('#btn-add-ean').onclick = () => {
@@ -264,13 +330,18 @@
         <div class="card row">
           <div class="grow">
             <div>${esc(i.name)}</div>
-            <div class="muted">${i.qty} × ${money(i.unit_price)}</div>
+            <div class="muted">${
+              i.unit_type === 'kg'
+                ? `${i.qty.toFixed(3)} kg × ${money(i.unit_price)}/kg`
+                : `${i.qty} × ${money(i.unit_price)}`
+            }</div>
           </div>
           <span class="price">${money(i.subtotal)}</span>
           <button class="link" data-del="${i.product_id}">✕</button>
         </div>`).join('')}
       <div class="total-bar"><span>Total</span><span>${money(order.total)}</span></div>
-      <button id="btn-pay" class="primary">Pagar com Pix — ${money(order.total)}</button>`;
+      <button id="btn-pay" class="primary">Pagar com Pix — ${money(order.total)}</button>
+      <button id="btn-cancel-order" class="link" style="width:100%;margin-top:10px">Cancelar pedido</button>`;
 
     view.querySelectorAll('[data-del]').forEach((btn) => {
       btn.onclick = async () => {
@@ -282,6 +353,7 @@
       };
     });
     $('#btn-pay').onclick = () => renderPayment(order.id);
+    $('#btn-cancel-order').onclick = () => confirmCancelOrder(order.id);
   }
 
   async function renderPayment(orderId) {
@@ -303,7 +375,10 @@
         <div class="pix-code" id="pix-code">${esc(payment.qr_payload)}</div>
         <button id="btn-copy" class="primary">Copiar código Pix</button>
         <p class="muted" style="margin-top:14px"><span class="spinner"></span>&nbsp; Aguardando confirmação do pagamento…</p>
+        <button id="btn-cancel-order" class="link" style="width:100%;margin-top:10px">Cancelar pedido</button>
       </div>`;
+
+    $('#btn-cancel-order').onclick = () => confirmCancelOrder(orderId);
 
     $('#btn-copy').onclick = async () => {
       const text = payment.qr_payload;
@@ -342,7 +417,9 @@
         <div class="big-emoji">✅</div>
         <p><b>Pagamento confirmado!</b></p>
         <p class="muted" style="margin:8px 0">Pedido #${order.id} — ${money(order.total)}</p>
-        ${order.items.map((i) => `<p class="muted">${i.qty}× ${esc(i.name)}</p>`).join('')}
+        ${order.items.map((i) => `<p class="muted">${
+          i.unit_type === 'kg' ? `${i.qty.toFixed(3)} kg` : `${i.qty}×`
+        } ${esc(i.name)}</p>`).join('')}
         <button class="primary" style="margin-top:16px" onclick="MM.go('catalog')">Voltar à loja</button>
       </div>`;
   }

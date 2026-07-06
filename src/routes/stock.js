@@ -19,8 +19,9 @@ stockRouter.get(
     const { storeId } = req.params;
     await assertStore(storeId);
     const { rows } = await query(
-      `SELECT p.id AS product_id, p.ean, p.name, p.category,
-              sp.qty, sp.min_qty, GREATEST(sp.min_qty * 2 - sp.qty, 0) AS suggested_qty
+      `SELECT p.id AS product_id, p.ean, p.name, p.category, p.unit_type,
+              sp.qty::float AS qty, sp.min_qty::float AS min_qty,
+              GREATEST(sp.min_qty * 2 - sp.qty, 0)::float AS suggested_qty
          FROM store_product sp
          JOIN product p ON p.id = sp.product_id
         WHERE sp.store_id = $1 AND sp.qty <= sp.min_qty
@@ -31,7 +32,8 @@ stockRouter.get(
   }),
 );
 
-// Registra uma reposição feita pelo operador
+// Registra uma reposição feita pelo operador. Para produtos por unidade,
+// qty é a contagem (inteiro >= 1); para produtos por peso, o peso em kg.
 stockRouter.post(
   '/stores/:storeId/restock',
   wrap(async (req, res) => {
@@ -45,16 +47,26 @@ stockRouter.post(
       const out = [];
       for (const { product_id, qty } of items) {
         const addQty = Number(qty);
-        if (!product_id || !Number.isInteger(addQty) || addQty < 1)
-          throw badRequest('cada item precisa de product_id e qty inteiro >= 1');
+        if (!product_id || !Number.isFinite(addQty) || addQty <= 0)
+          throw badRequest('cada item precisa de product_id e qty numérico > 0');
+
+        const { rows: meta } = await client.query(
+          `SELECT p.unit_type FROM store_product sp
+             JOIN product p ON p.id = sp.product_id
+            WHERE sp.store_id = $1 AND sp.product_id = $2`,
+          [storeId, product_id],
+        );
+        if (meta.length === 0)
+          throw notFound(`produto ${product_id} não cadastrado nesta loja`);
+        if (meta[0].unit_type === 'un' && !Number.isInteger(addQty))
+          throw badRequest(`produto ${product_id} é vendido por unidade; qty deve ser inteiro`);
+
         const { rows } = await client.query(
           `UPDATE store_product SET qty = qty + $3
             WHERE store_id = $1 AND product_id = $2
-            RETURNING product_id, qty`,
+            RETURNING product_id, qty::float AS qty`,
           [storeId, product_id, addQty],
         );
-        if (rows.length === 0)
-          throw notFound(`produto ${product_id} não cadastrado nesta loja`);
         await client.query(
           `INSERT INTO stock_movement (store_id, product_id, type, qty, reason)
            VALUES ($1, $2, 'restock', $3, 'reposição do operador')`,
@@ -85,17 +97,23 @@ stockRouter.post(
       const out = [];
       for (const { product_id, counted_qty, loss = false } of items) {
         const counted = Number(counted_qty);
-        if (!product_id || !Number.isInteger(counted) || counted < 0)
+        if (!product_id || !Number.isFinite(counted) || counted < 0)
           throw badRequest(
-            'cada item precisa de product_id e counted_qty inteiro >= 0',
+            'cada item precisa de product_id e counted_qty numérico >= 0',
           );
         const { rows: current } = await client.query(
-          `SELECT qty FROM store_product
-            WHERE store_id = $1 AND product_id = $2 FOR UPDATE`,
+          `SELECT sp.qty::float AS qty, p.unit_type
+             FROM store_product sp
+             JOIN product p ON p.id = sp.product_id
+            WHERE sp.store_id = $1 AND sp.product_id = $2 FOR UPDATE OF sp`,
           [storeId, product_id],
         );
         if (current.length === 0)
           throw notFound(`produto ${product_id} não cadastrado nesta loja`);
+        if (current[0].unit_type === 'un' && !Number.isInteger(counted))
+          throw badRequest(
+            `produto ${product_id} é vendido por unidade; counted_qty deve ser inteiro`,
+          );
         const delta = counted - current[0].qty;
         await client.query(
           `UPDATE store_product SET qty = $3

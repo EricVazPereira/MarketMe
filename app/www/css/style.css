@@ -111,6 +111,17 @@ label { font-size: 0.85rem; color: var(--muted); display: block; margin-top: 12p
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(10, 20, 15, 0.55);
+  display: flex; align-items: center; justify-content: center;
+  padding: 20px; z-index: 60;
+}
+.modal-card {
+  background: var(--card); border-radius: 14px; padding: 20px;
+  width: 100%; max-width: 340px;
+}
+.modal-card h3 { font-size: 1.05rem; margin-bottom: 4px; }
+
 #toast {
   position: fixed; bottom: 84px; left: 50%; transform: translateX(-50%);
   background: rgba(20, 35, 28, 0.92); color: #fff;

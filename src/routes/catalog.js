@@ -28,8 +28,8 @@ catalogRouter.get(
     if (store.rowCount === 0) throw notFound('loja não encontrada');
 
     const { rows } = await query(
-      `SELECT p.id, p.ean, p.name, p.category, p.image_url,
-              sp.price::float AS price, sp.qty AS available
+      `SELECT p.id, p.ean, p.name, p.category, p.image_url, p.unit_type,
+              sp.price::float AS price, sp.qty::float AS available
          FROM store_product sp
          JOIN product p ON p.id = sp.product_id
         WHERE sp.store_id = $1
@@ -46,8 +46,8 @@ catalogRouter.get(
   wrap(async (req, res) => {
     const { storeId, ean } = req.params;
     const { rows } = await query(
-      `SELECT p.id, p.ean, p.name, p.category, p.image_url,
-              sp.price::float AS price, sp.qty AS available
+      `SELECT p.id, p.ean, p.name, p.category, p.image_url, p.unit_type,
+              sp.price::float AS price, sp.qty::float AS available
          FROM store_product sp
          JOIN product p ON p.id = sp.product_id
         WHERE sp.store_id = $1 AND p.ean = $2`,
