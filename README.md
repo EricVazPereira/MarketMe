@@ -32,15 +32,19 @@ Este repositório implementa a **Fase 1 (MVP funcional)** do roadmap:
 ## Como rodar
 
 ```bash
-# 1. Configuração
-cp .env.example .env    # ajuste DATABASE_URL se necessário
-
-# 2. Banco (requer PostgreSQL com o banco/usuário criados)
-#    CREATE ROLE pointer LOGIN PASSWORD '...';
-#    CREATE DATABASE marketme OWNER pointer;
+# 1. Dependências
 npm install
-npm run db:init         # cria esquema + dados de exemplo
-# npm run db:init -- --reset  # recria do zero (apaga tudo!)
+
+# 2. Banco — caminho automático (recomendado): encontra o PostgreSQL,
+#    cria usuário/banco se faltarem (sem tocar em outros projetos),
+#    grava o .env e cria as tabelas + dados de exemplo
+npm run db:setup
+
+#    …ou caminho manual:
+#    cp .env.example .env  (ajuste DATABASE_URL)
+#    CREATE ROLE pointer LOGIN PASSWORD '...';  CREATE DATABASE marketme OWNER pointer;
+#    npm run db:init          # cria esquema + dados de exemplo
+#    npm run db:init -- --reset  # recria do zero (apaga tudo!)
 
 # 3. API
 npm start               # ou: npm run dev (com reload)

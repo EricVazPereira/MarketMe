@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "db:init": "node scripts/init-db.js",
+    "db:setup": "node scripts/setup-db.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
