@@ -26,6 +26,10 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
 
         webView = new WebView(this);
+        // Com targetSdk 35 o Android 15 força edge-to-edge; isto faz o
+        // sistema aplicar as barras (status/gestos) como padding em vez
+        // de desenhar o conteúdo por baixo delas.
+        webView.setFitsSystemWindows(true);
         setContentView(webView);
 
         WebSettings s = webView.getSettings();

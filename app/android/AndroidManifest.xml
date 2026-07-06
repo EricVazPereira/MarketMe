@@ -1,14 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="br.com.marketme.app"
-    android:versionCode="2"
-    android:versionName="0.2.0">
+    android:versionCode="3"
+    android:versionName="0.2.1">
 
-    <!-- targetSdk 34 (Android 14): evita o aviso de "app feito para versão
-         antiga / sem proteções de privacidade" na instalação. O app já
-         cumpre as exigências: permissão de câmera em runtime, exported
-         explícito e assinatura v2. -->
-    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="34"/>
+    <!-- targetSdk 35 (Android 15): evita o aviso de "app feito para versão
+         antiga / sem proteções de privacidade" na instalação. O app cumpre
+         as exigências: permissão de câmera em runtime, exported explícito,
+         assinatura v2/v3 e insets tratados (edge-to-edge do Android 15 —
+         ver fitsSystemWindows no MainActivity). Não subir para 36 enquanto
+         o build usar aapt/android.jar antigos: o alvo 36 liga o predictive
+         back por padrão e desativar exige um atributo de manifesto que o
+         aapt 29 não conhece. -->
+    <uses-sdk android:minSdkVersion="23" android:targetSdkVersion="35"/>
 
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.CAMERA"/>
