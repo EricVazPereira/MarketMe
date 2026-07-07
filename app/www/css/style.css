@@ -97,12 +97,15 @@ label { font-size: 0.85rem; color: var(--muted); display: block; margin-top: 12p
 }
 #reader video { object-fit: cover; }
 
-/* lista de itens no formato N | Descrição | Qtd | UN | Total | ✕ */
+/* lista de itens no formato N | Descrição | Qtd | R$UN | R$ Total | ✕
+   Cabeçalho e linhas usam a MESMA grade; colunas numéricas alinhadas à
+   direita com algarismos tabulares para ficarem coluna sob coluna. */
 .cart-head, .cart-row {
   display: grid;
-  grid-template-columns: 22px 1fr 46px 64px 78px 26px;
+  grid-template-columns: 18px minmax(0, 1fr) 52px 70px 82px 24px;
   align-items: center; gap: 4px;
   padding: 8px 10px;
+  font-variant-numeric: tabular-nums;
 }
 .cart-head {
   font-size: 0.72rem; color: var(--muted); text-transform: uppercase;
@@ -110,13 +113,17 @@ label { font-size: 0.85rem; color: var(--muted); display: block; margin-top: 12p
 }
 .cart-row {
   background: var(--card); border-radius: 10px; margin-bottom: 6px;
-  box-shadow: 0 1px 3px rgba(0,0,0,.06); font-size: 0.9rem;
+  box-shadow: 0 1px 3px rgba(0,0,0,.06); font-size: 0.88rem;
 }
-.cart-row .cart-total { font-weight: 700; color: var(--green); text-align: right; }
-.cart-row .cart-un { font-size: 0.75rem; color: var(--muted); text-align: right; }
-.cart-row .cart-qtd { text-align: center; }
-.cart-head span:nth-child(3) { text-align: center; }
-.cart-head span:nth-child(4), .cart-head span:nth-child(5) { text-align: right; }
+/* descrição numa linha só: nomes longos não desalinham as colunas */
+.cart-row .cart-name {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cart-row .cart-total { font-weight: 700; color: var(--green); }
+.cart-row .cart-un { font-size: 0.78rem; color: var(--muted); }
+.cart-head span:nth-child(n+3), .cart-row .cart-qtd,
+.cart-row .cart-un, .cart-row .cart-total { text-align: right; }
+.cart-head span:last-child, .cart-row button { text-align: center; }
 
 button.danger {
   width: 100%; padding: 14px; border: none; border-radius: 12px;

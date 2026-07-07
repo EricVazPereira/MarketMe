@@ -456,7 +456,7 @@
       ${grupos.map((g, i) => `
         <div class="cart-row">
           <span class="muted">${i + 1}</span>
-          <span>${esc(g.name)}</span>
+          <span class="cart-name" title="${esc(g.name)}">${esc(g.name)}</span>
           <span class="cart-qtd">${g.unidade === 'KG' ? `${g.qty.toFixed(3)}kg` : g.qty}</span>
           <span class="cart-un">${money(g.unit_price)}${g.unidade === 'KG' ? '/kg' : ''}</span>
           <span class="cart-total">${money(g.total)}</span>
