@@ -3,7 +3,9 @@ package br.com.marketme.app;
 import android.Manifest;
 import android.app.Activity;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
+import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -41,6 +43,21 @@ public class MainActivity extends Activity {
         s.setAllowUniversalAccessFromFileURLs(true);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
         s.setMediaPlaybackRequiresUserGesture(false);
+
+        // Ponte nativa mínima: o botão "Sair" (menu escondido do PDV)
+        // encerra o aplicativo de verdade via MMNative.exitApp()
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void exitApp() {
+                runOnUiThread(new Runnable() {
+                    @Override
+                    public void run() {
+                        if (Build.VERSION.SDK_INT >= 21) finishAndRemoveTask();
+                        else finish();
+                    }
+                });
+            }
+        }, "MMNative");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override

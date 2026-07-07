@@ -1,88 +1,90 @@
-/* MarketMe — app do cliente (scan & pay)
- * SPA vanilla que consome a API do backend. Roda no WebView do APK
- * Android (file://) ou em qualquer navegador moderno. */
+/* MarketMe — PDV de autoatendimento integrado ao servidor de API
+ * DataSnap (Server ZF / TSM). Fluxo: verificar caixa → abrir caixa →
+ * toque para iniciar → passar produtos (GravaItens) → fechar conta
+ * (FechamentoComandaSmartPDV). Roda no WebView do APK Android. */
 (() => {
   'use strict';
 
-  // ---------- estado ----------
+  // Credenciais padrão de operação do caixa (definidas pelo lojista)
+  const OPERADOR = { codigo: '0', senha: '794613' };
+  // Nome do método DataSnap de verificação de permissão — ajuste aqui
+  // se no seu servidor o método tiver outro nome
+  const PERMISSAO_METODO = 'VerificaPermissao';
+
+  // ---------- configuração ----------
   const cfg = {
-    get server() { return localStorage.getItem('mm.server') || ''; },
-    set server(v) { localStorage.setItem('mm.server', v.replace(/\/+$/, '')); },
-    get storeId() { return Number(localStorage.getItem('mm.store')) || 0; },
-    set storeId(v) { localStorage.setItem('mm.store', v); },
-    get storeName() { return localStorage.getItem('mm.storeName') || ''; },
-    set storeName(v) { localStorage.setItem('mm.storeName', v); },
-    get customerId() { return Number(localStorage.getItem('mm.customer')) || 0; },
-    set customerId(v) { localStorage.setItem('mm.customer', v); },
-    get dbPath() { return localStorage.getItem('mm.dbPath') || 'D:\\marketme\\bd\\orestra.fdb'; },
-    set dbPath(v) { localStorage.setItem('mm.dbPath', v); },
     get apiUrl() { return localStorage.getItem('mm.apiUrl') || ''; },
-    set apiUrl(v) { localStorage.setItem('mm.apiUrl', v); },
-    get apiUser() { return localStorage.getItem('mm.apiUser') || ''; },
-    set apiUser(v) { localStorage.setItem('mm.apiUser', v); },
-    get apiPass() { return localStorage.getItem('mm.apiPass') || ''; },
-    set apiPass(v) { localStorage.setItem('mm.apiPass', v); },
+    set apiUrl(v) { localStorage.setItem('mm.apiUrl', v.replace(/\/+$/, '')); },
+    get estacao() { return localStorage.getItem('mm.estacao') || 'DEVELOP'; },
+    set estacao(v) { localStorage.setItem('mm.estacao', v); },
+    get empresa() { return localStorage.getItem('mm.empresa') || ''; },
+    set empresa(v) { localStorage.setItem('mm.empresa', v); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
-    get orderId() { return Number(localStorage.getItem('mm.order')) || 0; },
-    set orderId(v) {
-      if (v) localStorage.setItem('mm.order', v);
-      else localStorage.removeItem('mm.order');
+    get conta() {
+      try { return JSON.parse(localStorage.getItem('mm.conta')) || { barcode: '', linhas: [] }; }
+      catch { return { barcode: '', linhas: [] }; }
+    },
+    set conta(v) {
+      if (v && (v.barcode || v.linhas.length)) localStorage.setItem('mm.conta', JSON.stringify(v));
+      else localStorage.removeItem('mm.conta');
     },
   };
 
-  let currentView = 'catalog';
+  let screen = 'boot';
   let scanner = null;
-  let pollTimer = null;
-  let lastScan = { ean: '', at: 0 };
+  let lastScan = { code: '', at: 0 };
 
   const $ = (sel) => document.querySelector(sel);
   const view = $('#view');
   const money = (v) => `R$ ${Number(v).toFixed(2).replace('.', ',')}`;
   const esc = (s) =>
-    String(s).replace(/[&<>"']/g, (c) =>
+    String(s ?? '').replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // preços do ERP vêm como "1,00" (vírgula decimal)
+  const parseBR = (v) => Number(String(v ?? '0').replace(/\./g, '').replace(',', '.'));
 
-  // ---------- API ----------
-  async function api(method, path, body) {
-    if (!cfg.server) throw new Error('configure o endereço do servidor');
-    const headers = {};
-    if (body) headers['content-type'] = 'application/json';
-    if (cfg.dbPath) headers['x-db-path'] = cfg.dbPath;
-    if (cfg.apiUser)
-      headers.authorization = 'Basic ' + btoa(`${cfg.apiUser}:${cfg.apiPass}`);
+  // ---------- API DataSnap ----------
+  async function tsm(method, path, body) {
+    if (!cfg.apiUrl) throw new Error('configure o endereço da API');
     let res;
     try {
-      res = await fetch(cfg.server + path, {
+      res = await fetch(`${cfg.apiUrl}/datasnap/rest/TSM/${path}`, {
         method,
-        headers,
+        headers: body ? { 'content-type': 'application/json' } : undefined,
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch {
-      throw new Error('sem conexão com o servidor');
+      throw new Error('sem conexão com o servidor de API');
     }
-    if (res.status === 401)
-      throw new Error('usuário/senha da API inválidos (veja Configurações)');
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `erro ${res.status}`);
+    if (!res.ok) throw new Error(`API respondeu ${res.status} em ${path}`);
+    let data = await res.json().catch(() => ({}));
+    // DataSnap clássico embrulha o retorno em {"result":[...]}
+    if (data && data.result && Array.isArray(data.result) && data.result.length === 1)
+      data = data.result[0];
     return data;
+  }
+
+  // O retorno de VerficaCXAberto não tem um campo booleano único —
+  // interpreta pela mensagem/id (tolerante a variações do servidor)
+  function caixaEstaAberto(resp) {
+    const texto = JSON.stringify(resp).toLowerCase();
+    if (/n[ãa]o est[áa] aberto|opera[çc][ãa]o inv[áa]lida|fechado/.test(texto)) return false;
+    if (Number(resp?.id_sucess) === 1) return true;
+    return /aberto/.test(texto);
   }
 
   // ---------- UI helpers ----------
   let toastTimer;
-  function toast(msg, ms = 2200) {
+  function toast(msg, ms = 2600) {
     const el = $('#toast');
     el.textContent = msg;
     el.classList.remove('hidden');
     clearTimeout(toastTimer);
     toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
   }
+  const setTitle = (t) => { $('#title').textContent = t; };
 
-  function setTitle(t) { $('#title').textContent = t; }
-
-  // Modal em HTML puro: o WebView do APK não trata window.alert/confirm/
-  // prompt (WebChromeClient não os sobrescreve), então essas chamadas
-  // nativas não exibem nada — toda confirmação usa este overlay.
   function openModal(html) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
@@ -90,25 +92,7 @@
     document.body.appendChild(overlay);
     return overlay;
   }
-  const closeModal = (overlay) => overlay.remove();
-
-  function formatPrice(p) {
-    return p.unit_type === 'kg' ? `${money(p.price)}/kg` : money(p.price);
-  }
-  function formatAvailable(p) {
-    return p.unit_type === 'kg'
-      ? `${Number(p.available).toFixed(3)} kg disponíveis`
-      : `${p.available} disponíveis`;
-  }
-
-  function updateBadge(order) {
-    // conta produtos distintos no carrinho, não a soma das quantidades —
-    // somar unidades com quilos (produto pesável) não faria sentido
-    const badge = $('#cart-badge');
-    const count = (order?.items || []).length;
-    badge.textContent = count;
-    badge.classList.toggle('hidden', count === 0);
-  }
+  const closeModal = (o) => o.remove();
 
   async function stopScanner() {
     if (scanner) {
@@ -118,114 +102,425 @@
     }
   }
 
-  function stopPolling() {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-
-  // ---------- pedido ----------
-  async function ensureOrder() {
-    if (cfg.orderId) {
-      try {
-        const order = await api('GET', `/orders/${cfg.orderId}`);
-        if (order.status === 'aberto') return order;
-      } catch { /* pedido sumiu; cria outro */ }
-      cfg.orderId = 0;
+  // ---------- conta (carrinho espelhando a comanda do PDV) ----------
+  // As linhas vêm do retorno do GravaItens (uma por unidade/pesagem);
+  // para exibir, agrupa por produto.
+  function agrupar(linhas) {
+    const map = new Map();
+    for (const l of linhas) {
+      const g = map.get(l.id) || {
+        id: l.id, name: (l.name || l.description || '').trim(),
+        unidade: l.unidade || 'UN', unit_price: Number(l.unit_price),
+        qty: 0, total: 0,
+      };
+      g.qty += Number(l.amount);
+      g.total += Number(l.total_price);
+      map.set(l.id, g);
     }
-    const order = await api('POST', '/orders', {
-      store_id: cfg.storeId,
-      customer_id: cfg.customerId,
+    return [...map.values()];
+  }
+  const totalConta = (linhas) =>
+    linhas.reduce((s, l) => s + Number(l.total_price), 0);
+
+  async function gravaItens(consumo) {
+    const conta = cfg.conta;
+    const linhas = await tsm('POST', 'GravaItens', {
+      cabecalho: { ID: conta.barcode, nm_estacao: cfg.estacao, NrMesa: '' },
+      consumo,
     });
-    cfg.orderId = order.id;
-    return order;
+    if (!Array.isArray(linhas))
+      throw new Error(linhas?.error || 'retorno inesperado do GravaItens');
+    // regra do PDV: a partir da 2ª inserção o ID é o barcode devolvido
+    const barcode = linhas.length > 0 ? linhas[0].barcode : conta.barcode;
+    cfg.conta = { barcode, linhas };
+    return linhas;
   }
 
-  async function currentOrder() {
-    if (!cfg.orderId) return null;
-    try {
-      const order = await api('GET', `/orders/${cfg.orderId}`);
-      if (order.status !== 'aberto') { cfg.orderId = 0; return null; }
-      return order;
-    } catch { cfg.orderId = 0; return null; }
-  }
-
-  async function addByEan(ean, qty = 1) {
-    const order = await ensureOrder();
-    const updated = await api('POST', `/orders/${order.id}/items`, { ean, qty });
-    updateBadge(updated);
-    const item = updated.items.find((i) => i.ean === ean);
-    if (navigator.vibrate) navigator.vibrate(80);
-    toast(`✔ ${item ? item.name : 'item'} — total ${money(updated.total)}`);
-    return updated;
-  }
-
-  async function cancelOrder(orderId) {
-    await api('POST', `/orders/${orderId}/cancel`);
-    stopPolling();
-    cfg.orderId = 0;
-    updateBadge(null);
-    toast('Pedido cancelado');
-    switchView('catalog');
-  }
-
-  function confirmCancelOrder(orderId) {
-    const overlay = openModal(`
-      <h3>Cancelar pedido?</h3>
-      <p class="muted">Os itens do carrinho serão descartados.</p>
-      <button id="modal-confirm" class="primary" style="background:var(--danger);margin-top:14px">Sim, cancelar</button>
-      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
-    overlay.querySelector('#modal-confirm').onclick = async () => {
-      closeModal(overlay);
-      try { await cancelOrder(orderId); } catch (e) { toast(`⚠️ ${e.message}`); }
-    };
-    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
-  }
-
-  function openWeightModal(product) {
-    const overlay = openModal(`
-      <h3>${esc(product.name)}</h3>
-      <p class="muted">${money(product.price)} / kg</p>
-      <label>Peso (kg)</label>
-      <input id="modal-weight" type="number" inputmode="decimal" step="0.001" min="0.001" value="0.500">
-      <button id="modal-confirm" class="primary" style="margin-top:14px">Adicionar ao carrinho</button>
-      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Cancelar</button>`);
-    overlay.querySelector('#modal-confirm').onclick = async () => {
-      const weight = Number(overlay.querySelector('#modal-weight').value);
-      if (!(weight > 0)) return toast('Informe um peso válido');
-      closeModal(overlay);
-      try { await addByEan(product.ean, weight); } catch (e) { toast(`⚠️ ${e.message}`); }
-    };
-    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
-  }
-
-  // Trata um código de barras vindo de qualquer origem: câmera, digitação
-  // ou leitor físico (Bluetooth/USB em modo teclado).
-  async function processEan(ean) {
+  // ---------- produto / scan ----------
+  // O código escaneado é consultado no ERP; etiqueta de balança
+  // (2 CCCCCC WWWWW D) traz o código do produto e o peso embutidos.
+  async function processCode(raw) {
+    const code = raw.trim();
+    if (!code) return;
     const now = Date.now();
-    if (ean === lastScan.ean && now - lastScan.at < 2500) return; // anti-duplo-scan
-    lastScan = { ean, at: now };
+    if (code === lastScan.code && now - lastScan.at < 2500) return; // anti-duplo-scan
+    lastScan = { code, at: now };
     try {
-      // Modo balança: etiqueta EAN-13 "2 CCCCCC WWWWW D" — o peso em
-      // gramas vem impresso no próprio código, sem perguntar ao cliente
-      if (cfg.scale && /^2\d{12}$/.test(ean)) {
-        const prefix = ean.slice(0, 7);
-        const grams = Number(ean.slice(7, 12));
-        const product = await api(
-          'GET', `/stores/${cfg.storeId}/products/scale/${prefix}`,
-        );
-        if (grams > 0) await addByEan(product.ean, grams / 1000);
-        else openWeightModal(product); // etiqueta sem peso → pergunta
-        return;
+      let lookup = code;
+      let pesoEtiqueta = 0;
+      if (cfg.scale && /^2\d{12}$/.test(code)) {
+        lookup = String(Number(code.slice(1, 7)));
+        pesoEtiqueta = Number(code.slice(7, 12)) / 1000;
       }
-      const product = await api('GET', `/stores/${cfg.storeId}/products/ean/${ean}`);
-      if (product.unit_type === 'kg') openWeightModal(product);
-      else await addByEan(ean);
+      const p = await tsm('GET', `ConsultaFormatoProduto/${encodeURIComponent(lookup)}`);
+      if (!p || !p.cod_pro) throw new Error(`produto ${lookup} não encontrado no ERP`);
+      if (p.fl_ativo !== '1') throw new Error(`${(p.ds_pro || 'produto').trim()} está inativo`);
+      const price = parseBR(p.vl_venda);
+      const isKg = String(p.un_pro).toUpperCase() === 'KG';
+
+      if (isKg && pesoEtiqueta > 0) return addItem(p, price, pesoEtiqueta);
+      if (isKg) return openWeightModal(p, price);
+      return addItem(p, price, 1);
     } catch (e) { toast(`⚠️ ${e.message}`); }
   }
 
-  // Leitor físico de código de barras (Bluetooth/USB no modo "teclado"):
-  // o leitor digita os dígitos muito rápido e termina com Enter. Este
-  // listener global captura essas rajadas em qualquer tela do app.
+  async function addItem(p, price, qty) {
+    await gravaItens([{
+      Cod_pro: p.cod_pro,
+      Obs_pro: '',
+      Qtde_pro: Number.isInteger(qty) ? String(qty) : qty.toFixed(3),
+      Vl_Pro: price.toFixed(2),
+      Acomp_Pro: '',
+    }]);
+    if (navigator.vibrate) navigator.vibrate(80);
+    toast(`✔ ${(p.ds_pro || '').trim()} — total ${money(totalConta(cfg.conta.linhas))}`);
+    if (screen === 'shop') refreshCart();
+  }
+
+  function openWeightModal(p, price) {
+    const overlay = openModal(`
+      <h3>${esc((p.ds_pro || '').trim())}</h3>
+      <p class="muted">${money(price)} / kg</p>
+      <label>Peso (kg)</label>
+      <input id="modal-weight" type="number" inputmode="decimal" step="0.001" min="0.001" value="0.500">
+      <button id="modal-confirm" class="primary" style="margin-top:14px">Adicionar</button>
+      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Cancelar</button>`);
+    overlay.querySelector('#modal-confirm').onclick = async () => {
+      const w = Number(overlay.querySelector('#modal-weight').value);
+      if (!(w > 0)) return toast('Informe um peso válido');
+      closeModal(overlay);
+      try { await addItem(p, price, w); } catch (e) { toast(`⚠️ ${e.message}`); }
+    };
+    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
+  }
+
+  // ---------- permissão (cancelamentos) ----------
+  function askPermission(funcao, titulo, onOk) {
+    const overlay = openModal(`
+      <h3>${esc(titulo)}</h3>
+      <p class="muted">Peça a um operador autorizado.</p>
+      <label>Código do operador</label>
+      <input id="perm-cod" type="text" inputmode="numeric" value="">
+      <label>Senha</label>
+      <input id="perm-senha" type="password">
+      <button id="modal-confirm" class="primary" style="margin-top:14px">Autorizar</button>
+      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
+    overlay.querySelector('#modal-confirm').onclick = async () => {
+      const codigo = overlay.querySelector('#perm-cod').value.trim();
+      const senha = overlay.querySelector('#perm-senha').value;
+      try {
+        const r = await tsm('POST', PERMISSAO_METODO, { funcao, codigo, senha });
+        if (String(r?.Resultado).toLowerCase() !== 'true')
+          return toast(r?.Mensagem || 'Usuário sem permissão para esta operação.');
+        closeModal(overlay);
+        onOk();
+      } catch (e) { toast(`⚠️ ${e.message}`); }
+    };
+    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
+  }
+
+  // ---------- telas ----------
+  async function renderSettings() {
+    screen = 'settings';
+    await stopScanner();
+    setTitle('Configurações');
+    view.innerHTML = `
+      <div class="card">
+        <label>Endereço da API (servidor Server ZF)</label>
+        <input id="in-api" type="url" placeholder="http://192.168.0.18:81"
+               value="${esc(cfg.apiUrl)}" autocapitalize="off">
+        <p class="muted" style="margin-top:4px">O app completa com /datasnap/rest/TSM/…</p>
+        <label>Nome da estação (nm_estacao)</label>
+        <input id="in-estacao" type="text" autocapitalize="characters" value="${esc(cfg.estacao)}">
+        <label>Balança integrada (etiqueta com peso no código de barras)</label>
+        <select id="in-scale">
+          <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
+          <option value="1" ${cfg.scale ? 'selected' : ''}>Sim — ler o peso da etiqueta</option>
+        </select>
+        <button id="btn-test" class="secondary" style="margin-top:12px">Testar conexão</button>
+        <p id="empresa-info" class="muted center" style="margin-top:8px">${esc(cfg.empresa)}</p>
+        <button id="btn-save" class="primary" style="margin-top:8px">Salvar e continuar</button>
+      </div>
+      <p class="muted center">MarketMe v0.4 — PDV autoatendimento</p>`;
+
+    const saveFields = () => {
+      cfg.apiUrl = $('#in-api').value.trim();
+      cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
+      cfg.scale = $('#in-scale').value === '1';
+    };
+    $('#btn-test').onclick = async () => {
+      saveFields();
+      try {
+        const emp = await tsm('GET', 'PegaDadosEmpresa');
+        const nome = emp['Nome Fantasia'] || emp['Razao Social'] || '?';
+        cfg.empresa = nome;
+        $('#empresa-info').textContent = `✔ Conectado: ${nome}`;
+        toast(`Empresa: ${nome}`);
+      } catch (e) { toast(`Erro: ${e.message}`); }
+    };
+    $('#btn-save').onclick = async () => {
+      saveFields();
+      if (!cfg.apiUrl) return toast('Informe o endereço da API');
+      renderCaixaCheck();
+    };
+  }
+
+  // Verifica caixa aberto ao entrar (regra do fluxo)
+  async function renderCaixaCheck() {
+    screen = 'caixa-check';
+    await stopScanner();
+    setTitle(cfg.empresa || 'MarketMe');
+    view.innerHTML = '<p class="center" style="padding:40px"><span class="spinner"></span><br><br>Verificando caixa…</p>';
+    try {
+      const r = await tsm('POST', 'VerficaCXAberto', { nm_estacao: cfg.estacao });
+      if (caixaEstaAberto(r)) renderStart();
+      else renderAbrirCaixa();
+    } catch (e) {
+      view.innerHTML = `<div class="card center">
+        <p>⚠️ ${esc(e.message)}</p>
+        <button class="secondary" style="margin-top:12px" onclick="MM.retry()">Tentar de novo</button>
+        <button class="link" style="margin-top:8px" onclick="MM.settings()">Configurações</button>
+      </div>`;
+    }
+  }
+
+  function renderAbrirCaixa() {
+    screen = 'abrir-caixa';
+    setTitle(cfg.empresa || 'MarketMe');
+    view.innerHTML = `
+      <div class="card center" style="margin-top:30px">
+        <div class="big-emoji">🔒</div>
+        <p><b>Caixa fechado</b></p>
+        <p class="muted" style="margin:8px 0">Estação ${esc(cfg.estacao)}</p>
+        <button id="btn-abrir" class="primary" style="margin-top:10px">Abrir caixa</button>
+      </div>`;
+    $('#btn-abrir').onclick = async () => {
+      try {
+        const r = await tsm('POST', 'AberturaCX', {
+          nm_estacao: cfg.estacao,
+          cod_operador: OPERADOR.codigo,
+          cod_executor: OPERADOR.codigo,
+        });
+        toast(r?.message_sucess || 'Caixa aberto');
+        renderStart();
+      } catch (e) { toast(`⚠️ ${e.message}`); }
+    };
+  }
+
+  // Tela inicial (antes da operação) com botões escondidos no canto
+  // superior direito: segurar o dedo ~1s revela "Fechar caixa" e "Sair"
+  function renderStart() {
+    screen = 'start';
+    stopScanner();
+    setTitle(cfg.empresa || 'MarketMe');
+    view.innerHTML = `
+      <div id="start-screen" class="start-screen">
+        <div class="big-emoji" style="font-size:4.5rem">🛒</div>
+        <h2>Toque para iniciar</h2>
+        <p class="muted" style="margin-top:8px">Passe seus produtos e pague sem filas</p>
+      </div>
+      <div id="corner-hot"></div>`;
+
+    $('#start-screen').onclick = () => renderShop();
+
+    // botões escondidos: pressionar e segurar o canto superior direito
+    const hot = $('#corner-hot');
+    let holdTimer = null;
+    const startHold = (ev) => {
+      ev.preventDefault();
+      holdTimer = setTimeout(showHiddenMenu, 900);
+    };
+    const cancelHold = () => clearTimeout(holdTimer);
+    hot.addEventListener('pointerdown', startHold);
+    hot.addEventListener('pointerup', cancelHold);
+    hot.addEventListener('pointerleave', cancelHold);
+  }
+
+  function showHiddenMenu() {
+    const overlay = openModal(`
+      <h3>Operações do caixa</h3>
+      <button id="menu-fechar" class="secondary" style="margin-top:12px">Fechar caixa</button>
+      <button id="menu-sair" class="secondary" style="margin-top:8px">Sair</button>
+      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
+    overlay.querySelector('#menu-fechar').onclick = () => {
+      closeModal(overlay);
+      renderFecharCaixa();
+    };
+    overlay.querySelector('#menu-sair').onclick = () => {
+      // sai do aplicativo (ponte nativa do APK; fallback fecha a página)
+      if (window.MMNative && window.MMNative.exitApp) window.MMNative.exitApp();
+      else window.close();
+    };
+    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
+  }
+
+  function renderFecharCaixa() {
+    screen = 'fechar-caixa';
+    setTitle('Fechar caixa');
+    view.innerHTML = `
+      <div class="card center" style="margin-top:30px">
+        <div class="big-emoji">🔐</div>
+        <p><b>Fechar caixa?</b></p>
+        <p class="muted" style="margin:8px 0">Estação ${esc(cfg.estacao)}</p>
+        <button id="btn-fechar-sim" class="primary" style="background:var(--danger);margin-top:10px">Sim, fechar o caixa</button>
+        <button id="btn-voltar" class="secondary" style="margin-top:8px">Voltar</button>
+      </div>`;
+    $('#btn-voltar').onclick = () => renderStart();
+    $('#btn-fechar-sim').onclick = async () => {
+      try {
+        const r = await tsm('POST', 'FechamentoCX', {
+          nm_estacao: cfg.estacao,
+          cod_executor: OPERADOR.codigo,
+        });
+        toast(r?.message_sucess || 'Caixa fechado');
+        renderAbrirCaixa(); // regra: após fechar, volta à abertura de caixa
+      } catch (e) { toast(`⚠️ ${e.message}`); }
+    };
+  }
+
+  // Tela de operação: câmera + código manual + conta em andamento
+  async function renderShop() {
+    screen = 'shop';
+    await stopScanner();
+    setTitle('Passe seus produtos');
+    view.innerHTML = `
+      <div id="reader"></div>
+      <div class="card" style="margin-top:10px">
+        <div class="row">
+          <input id="in-ean" class="grow" type="text" inputmode="numeric" placeholder="ou digite o código">
+          <button id="btn-add-ean" class="primary" style="width:110px">Adicionar</button>
+        </div>
+      </div>
+      <div id="cart-area"></div>`;
+
+    $('#btn-add-ean').onclick = () => {
+      const code = $('#in-ean').value.trim();
+      if (code) { processCode(code); $('#in-ean').value = ''; }
+    };
+    $('#in-ean').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); $('#btn-add-ean').click(); }
+    });
+
+    refreshCart();
+
+    try {
+      scanner = new Html5Qrcode('reader');
+      await scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 240, height: 150 } },
+        (text) => processCode(text),
+        () => {}, // frames sem código: ignora
+      );
+    } catch {
+      $('#reader').outerHTML =
+        '<div class="card center muted">Câmera indisponível — digite o código ou use o leitor.</div>';
+    }
+  }
+
+  function refreshCart() {
+    const area = $('#cart-area');
+    if (!area) return;
+    const { linhas } = cfg.conta;
+    if (linhas.length === 0) {
+      area.innerHTML = '<p class="center muted" style="padding:16px">Nenhum item ainda — passe o primeiro produto.</p>';
+      return;
+    }
+    const grupos = agrupar(linhas);
+    const total = totalConta(linhas);
+    area.innerHTML = `
+      ${grupos.map((g) => `
+        <div class="card row">
+          <div class="grow">
+            <div>${esc(g.name)}</div>
+            <div class="muted">${
+              g.unidade === 'KG'
+                ? `${g.qty.toFixed(3)} kg × ${money(g.unit_price)}/kg`
+                : `${g.qty} × ${money(g.unit_price)}`
+            }</div>
+          </div>
+          <span class="price">${money(g.total)}</span>
+          <button class="link" data-del="${esc(g.id)}" data-qty="${g.qty}">✕</button>
+        </div>`).join('')}
+      <div class="total-bar"><span>Total</span><span>${money(total)}</span></div>
+      <button id="btn-fechar-conta" class="primary">Fechar conta — ${money(total)}</button>
+      <button id="btn-cancelar-conta" class="link" style="width:100%;margin-top:10px">Cancelar conta</button>`;
+
+    // cancelar item exige permissão CANCEL_ITEM_CX_FUN
+    area.querySelectorAll('[data-del]').forEach((btn) => {
+      btn.onclick = () =>
+        askPermission('CANCEL_ITEM_CX_FUN', 'Cancelar item', async () => {
+          try {
+            const g = grupos.find((x) => x.id === btn.dataset.del);
+            await gravaItens([{
+              Cod_pro: g.id, Obs_pro: 'CANCELAMENTO',
+              Qtde_pro: `-${g.qty}`, Vl_Pro: g.unit_price.toFixed(2), Acomp_Pro: '',
+            }]);
+            toast('Item cancelado');
+            refreshCart();
+          } catch (e) { toast(`⚠️ ${e.message}`); }
+        });
+    });
+
+    // cancelar a conta inteira exige permissão CANCEL_CONTA_CX_FUN
+    $('#btn-cancelar-conta').onclick = () =>
+      askPermission('CANCEL_CONTA_CX_FUN', 'Cancelar conta', () => {
+        cfg.conta = { barcode: '', linhas: [] };
+        toast('Conta cancelada');
+        renderStart();
+      });
+
+    $('#btn-fechar-conta').onclick = () => renderPayment();
+  }
+
+  async function renderPayment() {
+    screen = 'payment';
+    await stopScanner();
+    setTitle('Fechar conta');
+    const { linhas, barcode } = cfg.conta;
+    const total = totalConta(linhas);
+    view.innerHTML = `
+      <div class="card">
+        <div class="total-bar"><span>Total a pagar</span><span>${money(total)}</span></div>
+        <label>CPF na nota (opcional)</label>
+        <input id="in-cpf" type="text" inputmode="numeric" placeholder="somente números">
+        <button id="btn-confirmar" class="primary" style="margin-top:14px">Confirmar pagamento</button>
+        <button id="btn-voltar" class="secondary" style="margin-top:8px">Voltar</button>
+      </div>`;
+    $('#btn-voltar').onclick = () => renderShop();
+    $('#btn-confirmar').onclick = async () => {
+      try {
+        const r = await tsm('POST', 'FechamentoComandaSmartPDV', {
+          subtotal: total.toFixed(2),
+          total: total.toFixed(2),
+          barcode,
+          discount: '0',
+          cpf: $('#in-cpf').value.replace(/\D/g, ''),
+          add_service: '0',
+          operadora_smart_pdv: `PIX|${total.toFixed(2)}|`,
+          nm_estacao: cfg.estacao,
+        });
+        if (r && r.sucess === false)
+          return toast(r.message_sucess || 'não foi possível fechar a conta');
+        cfg.conta = { barcode: '', linhas: [] };
+        renderSuccess(total, r?.message_sucess);
+      } catch (e) { toast(`⚠️ ${e.message}`); }
+    };
+  }
+
+  function renderSuccess(total, msg) {
+    screen = 'success';
+    setTitle('Conta fechada');
+    view.innerHTML = `
+      <div class="card center">
+        <div class="big-emoji">✅</div>
+        <p><b>Conta fechada!</b></p>
+        <p class="muted" style="margin:8px 0">${esc(msg || '')} — ${money(total)}</p>
+        <button class="primary" style="margin-top:16px" onclick="MM.start()">Concluir</button>
+      </div>`;
+    setTimeout(() => { if (screen === 'success') renderStart(); }, 8000);
+  }
+
+  // ---------- leitor físico (Bluetooth/USB modo teclado) ----------
   (() => {
     let buf = '';
     let lastKey = 0;
@@ -233,12 +528,15 @@
       const tag = (ev.target.tagName || '').toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
       const now = Date.now();
-      if (now - lastKey > 250) buf = ''; // pausa longa = digitação humana
+      if (now - lastKey > 250) buf = '';
       lastKey = now;
       if (ev.key === 'Enter') {
-        if (buf.length >= 8 && cfg.storeId) processEan(buf);
+        if (buf.length >= 4 && (screen === 'shop' || screen === 'start')) {
+          if (screen === 'start') renderShop().then(() => processCode(buf));
+          else processCode(buf);
+        }
         buf = '';
-      } else if (/^\d$/.test(ev.key)) {
+      } else if (/^[\dA-Za-z]$/.test(ev.key)) {
         buf += ev.key;
       } else {
         buf = '';
@@ -246,294 +544,15 @@
     });
   })();
 
-  // ---------- telas ----------
-  async function renderSettings(firstRun = false) {
-    stopPolling();
-    await stopScanner();
-    setTitle('Configurações');
-    view.innerHTML = `
-      <div class="card">
-        <label>Diretório do banco de dados (no PC do servidor)</label>
-        <input id="in-dbpath" type="text" autocapitalize="off"
-               placeholder="D:\\marketme\\bd\\orestra.fdb" value="${esc(cfg.dbPath)}">
-        <label>Endereço do conector no PC (ponte até o banco)</label>
-        <input id="in-server" type="url" placeholder="http://192.168.0.10:3000"
-               value="${esc(cfg.server)}" autocapitalize="off">
-        <button id="btn-test" class="secondary" style="margin-top:12px">Buscar empresa/loja</button>
-        <label>Loja (empresa do ERP)</label>
-        <select id="in-store"><option value="">— busque acima —</option></select>
-        <label>Nº do cliente (morador)</label>
-        <input id="in-customer" type="number" min="1" value="${cfg.customerId || 1}">
-        <label>Balança integrada (etiqueta com peso no código de barras)</label>
-        <select id="in-scale">
-          <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
-          <option value="1" ${cfg.scale ? 'selected' : ''}>Sim — ler o peso da etiqueta da balança</option>
-        </select>
-      </div>
-      <div class="card">
-        <p class="muted" style="margin-bottom:2px">Acesso por API (fase futura — campos ainda não usados)</p>
-        <label>Endereço da API</label>
-        <input id="in-api-url" type="text" autocapitalize="off"
-               placeholder="https://api.suaempresa.com.br" value="${esc(cfg.apiUrl)}">
-        <label>Token de autenticação da API</label>
-        <input id="in-api-user" type="text" autocapitalize="off"
-               placeholder="deixe vazio por enquanto" value="${esc(cfg.apiUser)}">
-        <label>Senha da API</label>
-        <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
-      </div>
-      <button id="btn-save" class="primary">Salvar e começar</button>
-      ${firstRun ? '' : '<button id="btn-clear-order" class="link" style="margin-top:10px;width:100%">Abandonar carrinho atual</button>'}
-      <p class="muted center" style="margin-top:10px">MarketMe v0.3 — mercado autônomo</p>`;
-
-    const storeSel = $('#in-store');
-    const saveConn = () => {
-      cfg.dbPath = $('#in-dbpath').value.trim();
-      cfg.server = $('#in-server').value.trim();
-      cfg.apiUrl = $('#in-api-url').value.trim(); // guardado; sem validação nesta fase
-      cfg.apiUser = $('#in-api-user').value.trim();
-      cfg.apiPass = $('#in-api-pass').value;
-    };
-    const loadStores = async () => {
-      saveConn();
-      try {
-        const { stores } = await api('GET', '/stores');
-        if (stores.length === 0) {
-          storeSel.innerHTML = '<option value="">— nenhuma empresa no ERP —</option>';
-          toast('Tabela EMPRESA vazia no banco informado.');
-          return;
-        }
-        // Uma empresa só (caso comum): seleciona automaticamente
-        storeSel.innerHTML = stores
-          .map((s) => `<option value="${s.id}" ${s.id === cfg.storeId || stores.length === 1 ? 'selected' : ''}>${esc(s.name)}</option>`)
-          .join('');
-        toast(stores.length === 1
-          ? `Empresa "${stores[0].name}" selecionada`
-          : `${stores.length} empresa(s) encontrada(s)`);
-      } catch (e) { toast(`Erro: ${e.message}`); }
-    };
-    $('#btn-test').onclick = loadStores;
-    if (cfg.server) loadStores();
-
-    $('#btn-save').onclick = () => {
-      saveConn();
-      const opt = storeSel.selectedOptions[0];
-      if (!cfg.server || !opt || !opt.value)
-        return toast('Informe o conector e busque a empresa/loja');
-      if (Number(opt.value) !== cfg.storeId) cfg.orderId = 0;
-      cfg.storeId = opt.value;
-      cfg.storeName = opt.textContent;
-      cfg.customerId = $('#in-customer').value || 1;
-      cfg.scale = $('#in-scale').value === '1';
-      switchView('catalog');
-    };
-    const clearBtn = $('#btn-clear-order');
-    if (clearBtn) clearBtn.onclick = () => { cfg.orderId = 0; updateBadge(null); toast('Carrinho abandonado'); };
-  }
-
-  async function renderCatalog() {
-    stopPolling();
-    await stopScanner();
-    if (!cfg.server || !cfg.storeId) return renderSettings(true);
-    setTitle(cfg.storeName || 'Loja');
-    view.innerHTML = '<p class="center" style="padding:30px"><span class="spinner"></span></p>';
-    try {
-      const [data, order] = await Promise.all([
-        api('GET', `/stores/${cfg.storeId}/catalog`),
-        currentOrder(),
-      ]);
-      updateBadge(order);
-      // available === null: estoque é do ERP nesta fase, não exibimos saldo
-      view.innerHTML = data.products
-        .map((p) => `
-          <div class="card row">
-            <div class="grow">
-              <div>${esc(p.name)}</div>
-              ${p.available == null ? '' : `<div class="muted">${p.available > 0 ? formatAvailable(p) : 'esgotado'}</div>`}
-            </div>
-            <span class="price">${formatPrice(p)}</span>
-          </div>`)
-        .join('') || '<p class="center muted" style="padding:30px">Nenhum produto com código de barras no cadastro</p>';
-    } catch (e) {
-      view.innerHTML = `<div class="card center">
-        <p>⚠️ ${esc(e.message)}</p>
-        <button class="secondary" style="margin-top:12px" onclick="MM.settings()">Abrir configurações</button>
-      </div>`;
-    }
-  }
-
-  async function renderScan() {
-    stopPolling();
-    await stopScanner();
-    if (!cfg.server || !cfg.storeId) return renderSettings(true);
-    setTitle('Escanear produto');
-    view.innerHTML = `
-      <div id="reader"></div>
-      <p class="muted center" style="margin:10px 0">Aponte a câmera para o código de barras</p>
-      <div class="card">
-        <label>Ou digite o código (EAN)</label>
-        <div class="row" style="margin-top:4px">
-          <input id="in-ean" class="grow" type="text" inputmode="numeric" placeholder="789...">
-          <button id="btn-add-ean" class="primary" style="width:110px">Adicionar</button>
-        </div>
-      </div>`;
-
-    $('#btn-add-ean').onclick = () => {
-      const ean = $('#in-ean').value.trim();
-      if (ean) { processEan(ean); $('#in-ean').value = ''; }
-    };
-    // leitor físico com o campo focado (ele envia Enter no fim do código)
-    $('#in-ean').addEventListener('keydown', (ev) => {
-      if (ev.key === 'Enter') { ev.preventDefault(); $('#btn-add-ean').click(); }
-    });
-
-    try {
-      scanner = new Html5Qrcode('reader');
-      await scanner.start(
-        { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 240, height: 150 } },
-        (text) => processEan(text.trim()),
-        () => {}, // frames sem código: ignora
-      );
-    } catch {
-      $('#reader').outerHTML =
-        '<div class="card center muted">Câmera indisponível — use o campo abaixo para digitar o código.</div>';
-    }
-  }
-
-  async function renderCart() {
-    stopPolling();
-    await stopScanner();
-    if (!cfg.server || !cfg.storeId) return renderSettings(true);
-    setTitle('Carrinho');
-    const order = await currentOrder();
-    updateBadge(order);
-    if (!order || order.items.length === 0) {
-      view.innerHTML = `<div class="card center">
-        <div class="big-emoji">🛒</div>
-        <p>Seu carrinho está vazio.</p>
-        <p class="muted" style="margin-top:6px">Escaneie um produto para começar.</p>
-        <button class="primary" style="margin-top:14px" onclick="MM.go('scan')">📷 Escanear</button>
-      </div>`;
-      return;
-    }
-    view.innerHTML = `
-      ${order.items.map((i) => `
-        <div class="card row">
-          <div class="grow">
-            <div>${esc(i.name)}</div>
-            <div class="muted">${
-              i.unit_type === 'kg'
-                ? `${i.qty.toFixed(3)} kg × ${money(i.unit_price)}/kg`
-                : `${i.qty} × ${money(i.unit_price)}`
-            }</div>
-          </div>
-          <span class="price">${money(i.subtotal)}</span>
-          <button class="link" data-del="${esc(i.product_code)}">✕</button>
-        </div>`).join('')}
-      <div class="total-bar"><span>Total</span><span>${money(order.total)}</span></div>
-      <button id="btn-pay" class="primary">Pagar com Pix — ${money(order.total)}</button>
-      <button id="btn-cancel-order" class="link" style="width:100%;margin-top:10px">Cancelar pedido</button>`;
-
-    view.querySelectorAll('[data-del]').forEach((btn) => {
-      btn.onclick = async () => {
-        try {
-          const updated = await api('DELETE', `/orders/${order.id}/items/${btn.dataset.del}`);
-          updateBadge(updated);
-          renderCart();
-        } catch (e) { toast(`⚠️ ${e.message}`); }
-      };
-    });
-    $('#btn-pay').onclick = () => renderPayment(order.id);
-    $('#btn-cancel-order').onclick = () => confirmCancelOrder(order.id);
-  }
-
-  async function renderPayment(orderId) {
-    await stopScanner();
-    setTitle('Pagamento Pix');
-    view.innerHTML = '<p class="center" style="padding:30px"><span class="spinner"></span></p>';
-    let payment;
-    try {
-      payment = await api('POST', `/orders/${orderId}/pay`);
-    } catch (e) {
-      toast(`⚠️ ${e.message}`);
-      return renderCart();
-    }
-    view.innerHTML = `
-      <div class="card center">
-        <div class="big-emoji">💠</div>
-        <p><b>${money(payment.amount)}</b></p>
-        <p class="muted" style="margin-top:4px">Copie o código abaixo e pague no app do seu banco.</p>
-        <div class="pix-code" id="pix-code">${esc(payment.qr_payload)}</div>
-        <button id="btn-copy" class="primary">Copiar código Pix</button>
-        <p class="muted" style="margin-top:14px"><span class="spinner"></span>&nbsp; Aguardando confirmação do pagamento…</p>
-        <button id="btn-cancel-order" class="link" style="width:100%;margin-top:10px">Cancelar pedido</button>
-      </div>`;
-
-    $('#btn-cancel-order').onclick = () => confirmCancelOrder(orderId);
-
-    $('#btn-copy').onclick = async () => {
-      const text = payment.qr_payload;
-      try {
-        await navigator.clipboard.writeText(text);
-        toast('Código copiado! Cole no app do banco.');
-      } catch {
-        const ta = document.createElement('textarea');
-        ta.value = text;
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand('copy');
-        ta.remove();
-        toast('Código copiado! Cole no app do banco.');
-      }
-    };
-
-    stopPolling();
-    pollTimer = setInterval(async () => {
-      try {
-        const order = await api('GET', `/orders/${orderId}`);
-        if (order.status === 'concluido' || order.status === 'pago') {
-          stopPolling();
-          cfg.orderId = 0;
-          updateBadge(null);
-          renderSuccess(order);
-        }
-      } catch { /* tenta de novo no próximo tick */ }
-    }, 3000);
-  }
-
-  function renderSuccess(order) {
-    setTitle('Compra concluída');
-    view.innerHTML = `
-      <div class="card center">
-        <div class="big-emoji">✅</div>
-        <p><b>Pagamento confirmado!</b></p>
-        <p class="muted" style="margin:8px 0">Pedido #${order.id} — ${money(order.total)}</p>
-        ${order.items.map((i) => `<p class="muted">${
-          i.unit_type === 'kg' ? `${i.qty.toFixed(3)} kg` : `${i.qty}×`
-        } ${esc(i.name)}</p>`).join('')}
-        <button class="primary" style="margin-top:16px" onclick="MM.go('catalog')">Voltar à loja</button>
-      </div>`;
-  }
-
   // ---------- navegação ----------
-  const views = { catalog: renderCatalog, scan: renderScan, cart: renderCart };
-
-  function switchView(name) {
-    currentView = name;
-    document.querySelectorAll('.tab').forEach((t) =>
-      t.classList.toggle('active', t.dataset.view === name));
-    (views[name] || renderCatalog)();
-  }
-
-  document.querySelectorAll('.tab').forEach((t) => {
-    t.onclick = () => switchView(t.dataset.view);
-  });
   $('#btn-settings').onclick = () => renderSettings();
+  window.MM = {
+    settings: () => renderSettings(),
+    retry: () => renderCaixaCheck(),
+    start: () => renderStart(),
+  };
 
-  // usado nos onclick inline
-  window.MM = { go: switchView, settings: () => renderSettings() };
-
-  // início
-  if (!cfg.server || !cfg.storeId) renderSettings(true);
-  else switchView('catalog');
+  // início: sem API configurada → configurações; senão → verificar caixa
+  if (!cfg.apiUrl) renderSettings();
+  else renderCaixaCheck();
 })();
