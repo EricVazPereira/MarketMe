@@ -450,37 +450,35 @@
     const grupos = agrupar(linhas);
     const total = totalConta(linhas);
     area.innerHTML = `
-      ${grupos.map((g) => `
-        <div class="card row">
-          <div class="grow">
-            <div>${esc(g.name)}</div>
-            <div class="muted">${
-              g.unidade === 'KG'
-                ? `${g.qty.toFixed(3)} kg × ${money(g.unit_price)}/kg`
-                : `${g.qty} × ${money(g.unit_price)}`
-            }</div>
-          </div>
-          <span class="price">${money(g.total)}</span>
-          <button class="link" data-del="${esc(g.id)}" data-qty="${g.qty}">✕</button>
+      <div class="cart-head">
+        <span>N</span><span>Descrição</span><span>Qtd</span><span>R$UN</span><span>R$ Total</span><span></span>
+      </div>
+      ${grupos.map((g, i) => `
+        <div class="cart-row">
+          <span class="muted">${i + 1}</span>
+          <span>${esc(g.name)}</span>
+          <span class="cart-qtd">${g.unidade === 'KG' ? `${g.qty.toFixed(3)}kg` : g.qty}</span>
+          <span class="cart-un">${money(g.unit_price)}${g.unidade === 'KG' ? '/kg' : ''}</span>
+          <span class="cart-total">${money(g.total)}</span>
+          <button class="link" data-del="${esc(g.id)}">✕</button>
         </div>`).join('')}
       <div class="total-bar"><span>Total</span><span>${money(total)}</span></div>
       <button id="btn-fechar-conta" class="primary">Fechar conta — ${money(total)}</button>
-      <button id="btn-cancelar-conta" class="link" style="width:100%;margin-top:10px">Cancelar conta</button>`;
+      <button id="btn-cancelar-conta" class="danger">Cancelar conta</button>`;
 
-    // cancelar item exige permissão CANCEL_ITEM_CX_FUN
+    // cancelar item: direto, sem senha (decisão de produto)
     area.querySelectorAll('[data-del]').forEach((btn) => {
-      btn.onclick = () =>
-        askPermission('CANCEL_ITEM_CX_FUN', 'Cancelar item', async () => {
-          try {
-            const g = grupos.find((x) => x.id === btn.dataset.del);
-            await gravaItens([{
-              Cod_pro: g.id, Obs_pro: 'CANCELAMENTO',
-              Qtde_pro: `-${g.qty}`, Vl_Pro: g.unit_price.toFixed(2), Acomp_Pro: '',
-            }]);
-            toast('Item cancelado');
-            refreshCart();
-          } catch (e) { toast(`⚠️ ${e.message}`); }
-        });
+      btn.onclick = async () => {
+        try {
+          const g = grupos.find((x) => x.id === btn.dataset.del);
+          await gravaItens([{
+            Cod_pro: g.id, Obs_pro: 'CANCELAMENTO',
+            Qtde_pro: `-${g.qty}`, Vl_Pro: g.unit_price.toFixed(2), Acomp_Pro: '',
+          }]);
+          toast('Item cancelado');
+          refreshCart();
+        } catch (e) { toast(`⚠️ ${e.message}`); }
+      };
     });
 
     // cancelar a conta inteira exige permissão CANCEL_CONTA_CX_FUN
