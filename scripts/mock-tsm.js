@@ -8,9 +8,21 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.set('Access-Control-Allow-Headers', 'content-type');
+  res.set('Access-Control-Allow-Headers', 'content-type,authorization');
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
+});
+
+// Autenticação básica como no Server ZF real (token/senha do .ini).
+// Defina MOCK_USER/MOCK_PASS para exigir; sem eles, aceita tudo.
+const AUTH_USER = process.env.MOCK_USER ?? '';
+const AUTH_PASS = process.env.MOCK_PASS ?? '';
+app.use((req, res, next) => {
+  if (!AUTH_USER) return next();
+  const expected =
+    'Basic ' + Buffer.from(`${AUTH_USER}:${AUTH_PASS}`).toString('base64');
+  if (req.get('authorization') === expected) return next();
+  res.status(401).json({ error: 'unauthorized' });
 });
 
 // estado do PDV

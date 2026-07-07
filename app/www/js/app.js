@@ -17,6 +17,11 @@
     set apiUrl(v) { localStorage.setItem('mm.apiUrl', v.replace(/\/+$/, '')); },
     get estacao() { return localStorage.getItem('mm.estacao') || 'DEVELOP'; },
     set estacao(v) { localStorage.setItem('mm.estacao', v); },
+    // credenciais da API (as mesmas do .ini do Server ZF)
+    get apiUser() { return localStorage.getItem('mm.apiUser') || ''; },
+    set apiUser(v) { localStorage.setItem('mm.apiUser', v); },
+    get apiPass() { return localStorage.getItem('mm.apiPass') || ''; },
+    set apiPass(v) { localStorage.setItem('mm.apiPass', v); },
     get empresa() { return localStorage.getItem('mm.empresa') || ''; },
     set empresa(v) { localStorage.setItem('mm.empresa', v); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
@@ -47,16 +52,26 @@
   // ---------- API DataSnap ----------
   async function tsm(method, path, body) {
     if (!cfg.apiUrl) throw new Error('configure o endereço da API');
+    const headers = {};
+    if (body) headers['content-type'] = 'application/json';
+    // DataSnap autentica por HTTP Basic (usuário/senha do .ini do servidor)
+    if (cfg.apiUser || cfg.apiPass)
+      headers.authorization = 'Basic ' + btoa(`${cfg.apiUser}:${cfg.apiPass}`);
     let res;
     try {
       res = await fetch(`${cfg.apiUrl}/datasnap/rest/TSM/${path}`, {
         method,
-        headers: body ? { 'content-type': 'application/json' } : undefined,
+        headers,
         body: body ? JSON.stringify(body) : undefined,
       });
     } catch {
       throw new Error('sem conexão com o servidor de API');
     }
+    if (res.status === 401)
+      throw new Error(
+        'API recusou as credenciais (401) — confira o usuário e a senha ' +
+        'da API nas Configurações (os mesmos do .ini do Server ZF)',
+      );
     if (!res.ok) throw new Error(`API respondeu ${res.status} em ${path}`);
     let data = await res.json().catch(() => ({}));
     // DataSnap clássico embrulha o retorno em {"result":[...]}
@@ -230,6 +245,11 @@
         <input id="in-api" type="url" placeholder="http://192.168.0.18:81"
                value="${esc(cfg.apiUrl)}" autocapitalize="off">
         <p class="muted" style="margin-top:4px">O app completa com /datasnap/rest/TSM/…</p>
+        <label>Token Autenticação API</label>
+        <input id="in-api-user" type="text" autocapitalize="off"
+               placeholder="usuário/token do .ini do Server ZF" value="${esc(cfg.apiUser)}">
+        <label>Senha</label>
+        <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
         <label>Nome da estação (nm_estacao)</label>
         <input id="in-estacao" type="text" autocapitalize="characters" value="${esc(cfg.estacao)}">
         <label>Balança integrada (etiqueta com peso no código de barras)</label>
@@ -245,6 +265,8 @@
 
     const saveFields = () => {
       cfg.apiUrl = $('#in-api').value.trim();
+      cfg.apiUser = $('#in-api-user').value.trim();
+      cfg.apiPass = $('#in-api-pass').value;
       cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
       cfg.scale = $('#in-scale').value === '1';
     };
