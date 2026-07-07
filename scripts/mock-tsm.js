@@ -132,9 +132,10 @@ app.post(`${T}/FechamentoComandaSmartPDV`, (req, res) => {
   res.json({ sucess: true, id_sucess: 0, message_sucess: 'Comanda Fechada com Sucesso !' });
 });
 
-app.post(`${T}/VerificaPermissao`, (req, res) => {
-  const { senha } = req.body ?? {};
-  if (senha === '794613') return res.json({ Resultado: 'True', Mensagem: 'OK' });
+app.post(`${T}/VerificaPermissaoUsuario`, (req, res) => {
+  const { codigo, senha } = req.body ?? {};
+  if (codigo === '0' && senha === '794613')
+    return res.json({ Resultado: 'True', Mensagem: 'OK' });
   res.json({ Resultado: 'False', Mensagem: 'Usuário sem Permissão para esta Operação.' });
 });
 

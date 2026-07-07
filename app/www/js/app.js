@@ -5,11 +5,10 @@
 (() => {
   'use strict';
 
-  // Credenciais padrão de operação do caixa (definidas pelo lojista)
+  // Credenciais padrão de operação do caixa (definidas pelo lojista);
+  // usadas na abertura/fechamento de caixa e nas permissões de cancelar
   const OPERADOR = { codigo: '0', senha: '794613' };
-  // Nome do método DataSnap de verificação de permissão — ajuste aqui
-  // se no seu servidor o método tiver outro nome
-  const PERMISSAO_METODO = 'VerificaPermissao';
+  const PERMISSAO_METODO = 'VerificaPermissaoUsuario';
 
   // ---------- configuração ----------
   const cfg = {
@@ -210,28 +209,19 @@
   }
 
   // ---------- permissão (cancelamentos) ----------
-  function askPermission(funcao, titulo, onOk) {
-    const overlay = openModal(`
-      <h3>${esc(titulo)}</h3>
-      <p class="muted">Peça a um operador autorizado.</p>
-      <label>Código do operador</label>
-      <input id="perm-cod" type="text" inputmode="numeric" value="">
-      <label>Senha</label>
-      <input id="perm-senha" type="password">
-      <button id="modal-confirm" class="primary" style="margin-top:14px">Autorizar</button>
-      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
-    overlay.querySelector('#modal-confirm').onclick = async () => {
-      const codigo = overlay.querySelector('#perm-cod').value.trim();
-      const senha = overlay.querySelector('#perm-senha').value;
-      try {
-        const r = await tsm('POST', PERMISSAO_METODO, { funcao, codigo, senha });
-        if (String(r?.Resultado).toLowerCase() !== 'true')
-          return toast(r?.Mensagem || 'Usuário sem permissão para esta operação.');
-        closeModal(overlay);
-        onOk();
-      } catch (e) { toast(`⚠️ ${e.message}`); }
-    };
-    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
+  // Valida no servidor com as credenciais fixas do caixa (0/794613),
+  // sem pedir nada na tela. Lança erro com a Mensagem quando negado.
+  async function checkPermission(funcao) {
+    const r = await tsm('POST', PERMISSAO_METODO, {
+      funcao,
+      codigo: OPERADOR.codigo,
+      senha: OPERADOR.senha,
+    });
+    const ok =
+      String(r?.Resultado ?? r?.resultado).toLowerCase() === 'true' ||
+      r?.Resultado === true || r?.resultado === true;
+    if (!ok)
+      throw new Error(r?.Mensagem || 'Usuário sem permissão para esta operação.');
   }
 
   // ---------- telas ----------
@@ -466,10 +456,11 @@
       <button id="btn-fechar-conta" class="primary">Fechar conta — ${money(total)}</button>
       <button id="btn-cancelar-conta" class="danger">Cancelar conta</button>`;
 
-    // cancelar item: direto, sem senha (decisão de produto)
+    // cancelar item: valida CANCEL_ITEM_CX_FUN no servidor e estorna
     area.querySelectorAll('[data-del]').forEach((btn) => {
       btn.onclick = async () => {
         try {
+          await checkPermission('CANCEL_ITEM_CX_FUN');
           const g = grupos.find((x) => x.id === btn.dataset.del);
           await gravaItens([{
             Cod_pro: g.id, Obs_pro: 'CANCELAMENTO',
@@ -481,13 +472,24 @@
       };
     });
 
-    // cancelar a conta inteira exige permissão CANCEL_CONTA_CX_FUN
-    $('#btn-cancelar-conta').onclick = () =>
-      askPermission('CANCEL_CONTA_CX_FUN', 'Cancelar conta', () => {
-        cfg.conta = { barcode: '', linhas: [] };
-        toast('Conta cancelada');
-        renderStart();
-      });
+    // cancelar a conta: confirmação na tela + CANCEL_CONTA_CX_FUN
+    $('#btn-cancelar-conta').onclick = () => {
+      const overlay = openModal(`
+        <h3>Cancelar conta?</h3>
+        <p class="muted">Todos os itens serão descartados.</p>
+        <button id="modal-confirm" class="danger">Sim, cancelar a conta</button>
+        <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
+      overlay.querySelector('#modal-confirm').onclick = async () => {
+        try {
+          await checkPermission('CANCEL_CONTA_CX_FUN');
+          closeModal(overlay);
+          cfg.conta = { barcode: '', linhas: [] };
+          toast('Conta cancelada');
+          renderStart();
+        } catch (e) { toast(`⚠️ ${e.message}`); }
+      };
+      overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
+    };
 
     $('#btn-fechar-conta').onclick = () => renderPayment();
   }
