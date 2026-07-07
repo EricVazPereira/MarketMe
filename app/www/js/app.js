@@ -14,6 +14,10 @@
     set storeName(v) { localStorage.setItem('mm.storeName', v); },
     get customerId() { return Number(localStorage.getItem('mm.customer')) || 0; },
     set customerId(v) { localStorage.setItem('mm.customer', v); },
+    get dbPath() { return localStorage.getItem('mm.dbPath') || 'D:\\marketme\\bd\\orestra.fdb'; },
+    set dbPath(v) { localStorage.setItem('mm.dbPath', v); },
+    get apiUrl() { return localStorage.getItem('mm.apiUrl') || ''; },
+    set apiUrl(v) { localStorage.setItem('mm.apiUrl', v); },
     get apiUser() { return localStorage.getItem('mm.apiUser') || ''; },
     set apiUser(v) { localStorage.setItem('mm.apiUser', v); },
     get apiPass() { return localStorage.getItem('mm.apiPass') || ''; },
@@ -44,6 +48,7 @@
     if (!cfg.server) throw new Error('configure o endereço do servidor');
     const headers = {};
     if (body) headers['content-type'] = 'application/json';
+    if (cfg.dbPath) headers['x-db-path'] = cfg.dbPath;
     if (cfg.apiUser)
       headers.authorization = 'Basic ' + btoa(`${cfg.apiUser}:${cfg.apiPass}`);
     let res;
@@ -193,6 +198,54 @@
     overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
   }
 
+  // Trata um código de barras vindo de qualquer origem: câmera, digitação
+  // ou leitor físico (Bluetooth/USB em modo teclado).
+  async function processEan(ean) {
+    const now = Date.now();
+    if (ean === lastScan.ean && now - lastScan.at < 2500) return; // anti-duplo-scan
+    lastScan = { ean, at: now };
+    try {
+      // Modo balança: etiqueta EAN-13 "2 CCCCCC WWWWW D" — o peso em
+      // gramas vem impresso no próprio código, sem perguntar ao cliente
+      if (cfg.scale && /^2\d{12}$/.test(ean)) {
+        const prefix = ean.slice(0, 7);
+        const grams = Number(ean.slice(7, 12));
+        const product = await api(
+          'GET', `/stores/${cfg.storeId}/products/scale/${prefix}`,
+        );
+        if (grams > 0) await addByEan(product.ean, grams / 1000);
+        else openWeightModal(product); // etiqueta sem peso → pergunta
+        return;
+      }
+      const product = await api('GET', `/stores/${cfg.storeId}/products/ean/${ean}`);
+      if (product.unit_type === 'kg') openWeightModal(product);
+      else await addByEan(ean);
+    } catch (e) { toast(`⚠️ ${e.message}`); }
+  }
+
+  // Leitor físico de código de barras (Bluetooth/USB no modo "teclado"):
+  // o leitor digita os dígitos muito rápido e termina com Enter. Este
+  // listener global captura essas rajadas em qualquer tela do app.
+  (() => {
+    let buf = '';
+    let lastKey = 0;
+    document.addEventListener('keydown', (ev) => {
+      const tag = (ev.target.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      const now = Date.now();
+      if (now - lastKey > 250) buf = ''; // pausa longa = digitação humana
+      lastKey = now;
+      if (ev.key === 'Enter') {
+        if (buf.length >= 8 && cfg.storeId) processEan(buf);
+        buf = '';
+      } else if (/^\d$/.test(ev.key)) {
+        buf += ev.key;
+      } else {
+        buf = '';
+      }
+    });
+  })();
+
   // ---------- telas ----------
   async function renderSettings(firstRun = false) {
     stopPolling();
@@ -200,17 +253,15 @@
     setTitle('Configurações');
     view.innerHTML = `
       <div class="card">
-        <label>Endereço do servidor (API)</label>
+        <label>Diretório do banco de dados (no PC do servidor)</label>
+        <input id="in-dbpath" type="text" autocapitalize="off"
+               placeholder="D:\\marketme\\bd\\orestra.fdb" value="${esc(cfg.dbPath)}">
+        <label>Endereço do conector no PC (ponte até o banco)</label>
         <input id="in-server" type="url" placeholder="http://192.168.0.10:3000"
                value="${esc(cfg.server)}" autocapitalize="off">
-        <label>Usuário da API (se o servidor exigir)</label>
-        <input id="in-api-user" type="text" autocapitalize="off"
-               placeholder="deixe vazio se não usar" value="${esc(cfg.apiUser)}">
-        <label>Senha da API</label>
-        <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
-        <button id="btn-test" class="secondary" style="margin-top:12px">Buscar lojas</button>
-        <label>Loja</label>
-        <select id="in-store"><option value="">— busque as lojas acima —</option></select>
+        <button id="btn-test" class="secondary" style="margin-top:12px">Buscar empresa/loja</button>
+        <label>Loja (empresa do ERP)</label>
+        <select id="in-store"><option value="">— busque acima —</option></select>
         <label>Nº do cliente (morador)</label>
         <input id="in-customer" type="number" min="1" value="${cfg.customerId || 1}">
         <label>Balança integrada (etiqueta com peso no código de barras)</label>
@@ -218,16 +269,27 @@
           <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
           <option value="1" ${cfg.scale ? 'selected' : ''}>Sim — ler o peso da etiqueta da balança</option>
         </select>
-        <button id="btn-save" class="primary" style="margin-top:16px">Salvar e começar</button>
-        ${firstRun ? '' : '<button id="btn-clear-order" class="link" style="margin-top:10px;width:100%">Abandonar carrinho atual</button>'}
       </div>
-      <p class="muted center">MarketMe v0.1 — mercado autônomo do seu condomínio</p>
-      <p class="muted center" style="margin-top:6px">O banco de dados é configurado no
-        servidor (arquivo .env), nunca no app.</p>`;
+      <div class="card">
+        <p class="muted" style="margin-bottom:2px">Acesso por API (fase futura — campos ainda não usados)</p>
+        <label>Endereço da API</label>
+        <input id="in-api-url" type="text" autocapitalize="off"
+               placeholder="https://api.suaempresa.com.br" value="${esc(cfg.apiUrl)}">
+        <label>Token de autenticação da API</label>
+        <input id="in-api-user" type="text" autocapitalize="off"
+               placeholder="deixe vazio por enquanto" value="${esc(cfg.apiUser)}">
+        <label>Senha da API</label>
+        <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
+      </div>
+      <button id="btn-save" class="primary">Salvar e começar</button>
+      ${firstRun ? '' : '<button id="btn-clear-order" class="link" style="margin-top:10px;width:100%">Abandonar carrinho atual</button>'}
+      <p class="muted center" style="margin-top:10px">MarketMe v0.3 — mercado autônomo</p>`;
 
     const storeSel = $('#in-store');
     const saveConn = () => {
+      cfg.dbPath = $('#in-dbpath').value.trim();
       cfg.server = $('#in-server').value.trim();
+      cfg.apiUrl = $('#in-api-url').value.trim(); // guardado; sem validação nesta fase
       cfg.apiUser = $('#in-api-user').value.trim();
       cfg.apiPass = $('#in-api-pass').value;
     };
@@ -236,17 +298,17 @@
       try {
         const { stores } = await api('GET', '/stores');
         if (stores.length === 0) {
-          storeSel.innerHTML = '<option value="">— nenhuma loja cadastrada —</option>';
-          toast('Nenhuma loja no banco. No servidor, rode: npm run db:init');
+          storeSel.innerHTML = '<option value="">— nenhuma empresa no ERP —</option>';
+          toast('Tabela EMPRESA vazia no banco informado.');
           return;
         }
-        // Operação com uma loja só (caso comum): seleciona automaticamente
+        // Uma empresa só (caso comum): seleciona automaticamente
         storeSel.innerHTML = stores
           .map((s) => `<option value="${s.id}" ${s.id === cfg.storeId || stores.length === 1 ? 'selected' : ''}>${esc(s.name)}</option>`)
           .join('');
         toast(stores.length === 1
-          ? `Loja "${stores[0].name}" selecionada`
-          : `${stores.length} loja(s) encontrada(s)`);
+          ? `Empresa "${stores[0].name}" selecionada`
+          : `${stores.length} empresa(s) encontrada(s)`);
       } catch (e) { toast(`Erro: ${e.message}`); }
     };
     $('#btn-test').onclick = loadStores;
@@ -255,7 +317,8 @@
     $('#btn-save').onclick = () => {
       saveConn();
       const opt = storeSel.selectedOptions[0];
-      if (!cfg.server || !opt || !opt.value) return toast('Informe servidor e loja');
+      if (!cfg.server || !opt || !opt.value)
+        return toast('Informe o conector e busque a empresa/loja');
       if (Number(opt.value) !== cfg.storeId) cfg.orderId = 0;
       cfg.storeId = opt.value;
       cfg.storeName = opt.textContent;
@@ -279,20 +342,17 @@
         currentOrder(),
       ]);
       updateBadge(order);
-      const cats = {};
-      for (const p of data.products) (cats[p.category || 'Outros'] ||= []).push(p);
-      view.innerHTML = Object.entries(cats)
-        .map(([cat, prods]) => `
-          <p class="muted" style="margin:8px 4px 6px">${esc(cat)}</p>
-          ${prods.map((p) => `
-            <div class="card row">
-              <div class="grow">
-                <div>${esc(p.name)}</div>
-                <div class="muted">${p.available > 0 ? formatAvailable(p) : 'esgotado'}</div>
-              </div>
-              <span class="price">${formatPrice(p)}</span>
-            </div>`).join('')}`)
-        .join('') || '<p class="center muted" style="padding:30px">Catálogo vazio</p>';
+      // available === null: estoque é do ERP nesta fase, não exibimos saldo
+      view.innerHTML = data.products
+        .map((p) => `
+          <div class="card row">
+            <div class="grow">
+              <div>${esc(p.name)}</div>
+              ${p.available == null ? '' : `<div class="muted">${p.available > 0 ? formatAvailable(p) : 'esgotado'}</div>`}
+            </div>
+            <span class="price">${formatPrice(p)}</span>
+          </div>`)
+        .join('') || '<p class="center muted" style="padding:30px">Nenhum produto com código de barras no cadastro</p>';
     } catch (e) {
       view.innerHTML = `<div class="card center">
         <p>⚠️ ${esc(e.message)}</p>
@@ -317,40 +377,21 @@
         </div>
       </div>`;
 
-    const handleEan = async (ean) => {
-      const now = Date.now();
-      if (ean === lastScan.ean && now - lastScan.at < 2500) return; // anti-duplo-scan
-      lastScan = { ean, at: now };
-      try {
-        // Modo balança: etiqueta EAN-13 "2 CCCCCC WWWWW D" — o peso em
-        // gramas vem impresso no próprio código, sem perguntar ao cliente
-        if (cfg.scale && /^2\d{12}$/.test(ean)) {
-          const prefix = ean.slice(0, 7);
-          const grams = Number(ean.slice(7, 12));
-          const product = await api(
-            'GET', `/stores/${cfg.storeId}/products/scale/${prefix}`,
-          );
-          if (grams > 0) await addByEan(product.ean, grams / 1000);
-          else openWeightModal(product); // etiqueta sem peso → pergunta
-          return;
-        }
-        const product = await api('GET', `/stores/${cfg.storeId}/products/ean/${ean}`);
-        if (product.unit_type === 'kg') openWeightModal(product);
-        else await addByEan(ean);
-      } catch (e) { toast(`⚠️ ${e.message}`); }
-    };
-
     $('#btn-add-ean').onclick = () => {
       const ean = $('#in-ean').value.trim();
-      if (ean) { handleEan(ean); $('#in-ean').value = ''; }
+      if (ean) { processEan(ean); $('#in-ean').value = ''; }
     };
+    // leitor físico com o campo focado (ele envia Enter no fim do código)
+    $('#in-ean').addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); $('#btn-add-ean').click(); }
+    });
 
     try {
       scanner = new Html5Qrcode('reader');
       await scanner.start(
         { facingMode: 'environment' },
         { fps: 10, qrbox: { width: 240, height: 150 } },
-        (text) => handleEan(text.trim()),
+        (text) => processEan(text.trim()),
         () => {}, // frames sem código: ignora
       );
     } catch {
@@ -387,7 +428,7 @@
             }</div>
           </div>
           <span class="price">${money(i.subtotal)}</span>
-          <button class="link" data-del="${i.product_id}">✕</button>
+          <button class="link" data-del="${esc(i.product_code)}">✕</button>
         </div>`).join('')}
       <div class="total-bar"><span>Total</span><span>${money(order.total)}</span></div>
       <button id="btn-pay" class="primary">Pagar com Pix — ${money(order.total)}</button>

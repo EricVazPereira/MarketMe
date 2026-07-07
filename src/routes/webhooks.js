@@ -5,10 +5,10 @@ import { config } from '../config.js';
 
 export const webhooksRouter = Router();
 
-// Confirmação de pagamento vinda do PSP (Pix). Regras críticas da pesquisa:
+// Confirmação de pagamento vinda do PSP (Pix). Regras críticas:
 // - o pedido SÓ conclui aqui, nunca no clique do cliente;
-// - idempotente: o PSP pode reenviar o evento sem cobrar/baixar duas vezes;
-// - baixa de estoque atômica (mesma transação da confirmação).
+// - idempotente: o PSP pode reenviar o evento sem concluir duas vezes.
+// Baixa de estoque não acontece aqui nesta fase: o estoque é do ERP.
 webhooksRouter.post(
   '/webhooks/psp',
   wrap(async (req, res) => {
@@ -26,8 +26,7 @@ webhooksRouter.post(
 
     const result = await withTransaction(async (client) => {
       const { rows: payments } = await client.query(
-        `SELECT id, order_id, status, amount::float AS amount
-           FROM payment WHERE psp_txid = $1 FOR UPDATE`,
+        `SELECT id, order_id, status FROM payment WHERE psp_txid = $1 FOR UPDATE`,
         [txid],
       );
       // txid desconhecido: 200 mesmo assim para o PSP não reenviar eternamente
@@ -50,54 +49,17 @@ webhooksRouter.post(
         `UPDATE payment SET status = 'pago', paid_at = now() WHERE id = $1`,
         [payment.id],
       );
-
-      const { rows: items } = await client.query(
-        `SELECT oi.product_id, oi.qty, o.store_id
-           FROM order_item oi
-           JOIN orders o ON o.id = oi.order_id
-          WHERE oi.order_id = $1`,
-        [payment.order_id],
-      );
-
-      const lowStock = [];
-      for (const item of items) {
-        const { rows } = await client.query(
-          `UPDATE store_product
-              SET qty = qty - $3
-            WHERE store_id = $1 AND product_id = $2
-            RETURNING qty, min_qty`,
-          [item.store_id, item.product_id, item.qty],
-        );
-        await client.query(
-          `INSERT INTO stock_movement (store_id, product_id, type, qty, order_id)
-           VALUES ($1, $2, 'sale', $3, $4)`,
-          [item.store_id, item.product_id, -item.qty, payment.order_id],
-        );
-        if (rows.length > 0 && rows[0].qty <= rows[0].min_qty) {
-          lowStock.push({ product_id: item.product_id, qty: rows[0].qty });
-        }
-      }
-
       await client.query(
         `UPDATE orders SET status = 'concluido', paid_at = now() WHERE id = $1`,
         [payment.order_id],
       );
-
       return {
         received: true,
         order_id: payment.order_id,
         order_status: 'concluido',
-        low_stock_alerts: lowStock,
       };
     });
 
-    if (result.low_stock_alerts?.length) {
-      // MVP: alerta via log; a lista completa fica em GET /stores/:id/restock-list
-      console.warn(
-        `[estoque] loja com itens no mínimo após pedido ${result.order_id}:`,
-        result.low_stock_alerts,
-      );
-    }
     res.json(result);
   }),
 );

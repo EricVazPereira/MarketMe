@@ -1,41 +1,11 @@
--- MarketMe — esquema do banco (Fase 1)
--- Núcleo do modelo de dados da pesquisa (PESQUISA_MERCADO_AUTONOMO.md, seção 5),
--- sem os módulos de antifurto e repasse (fases futuras).
+-- MarketMe — esquema local do conector (v2, fase Firebird direto)
+--
+-- Cadastros (empresa/loja, produtos, preços) vêm do Firebird do ERP em
+-- tempo real; aqui ficam só os dados operacionais do MarketMe: clientes
+-- do app, pedidos (com snapshot de nome/preço no momento do scan) e
+-- pagamentos Pix. Estoque é responsabilidade do ERP nesta fase.
 
 BEGIN;
-
-CREATE TABLE IF NOT EXISTS store (
-  id          SERIAL PRIMARY KEY,
-  name        TEXT NOT NULL,
-  condo_id    TEXT,
-  address     TEXT,
-  status      TEXT NOT NULL DEFAULT 'ativa'
-              CHECK (status IN ('ativa', 'inativa')),
-  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE TABLE IF NOT EXISTS product (
-  id            SERIAL PRIMARY KEY,
-  ean           TEXT NOT NULL UNIQUE,
-  name          TEXT NOT NULL,
-  category      TEXT,
-  image_url     TEXT,
-  default_price NUMERIC(10,2) NOT NULL CHECK (default_price >= 0),
-  -- 'un' = vendido por unidade; 'kg' = vendido por peso (hortifruti, açougue, padaria)
-  unit_type     TEXT NOT NULL DEFAULT 'un' CHECK (unit_type IN ('un', 'kg')),
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
--- Preço e estoque são POR LOJA, não globais (regra crítica da pesquisa).
--- qty/min_qty em NUMERIC para suportar peso fracionário (ex.: 1,500 kg).
-CREATE TABLE IF NOT EXISTS store_product (
-  store_id   INTEGER NOT NULL REFERENCES store(id),
-  product_id INTEGER NOT NULL REFERENCES product(id),
-  price      NUMERIC(10,2) NOT NULL CHECK (price >= 0),
-  qty        NUMERIC(10,3) NOT NULL DEFAULT 0,
-  min_qty    NUMERIC(10,3) NOT NULL DEFAULT 0 CHECK (min_qty >= 0),
-  PRIMARY KEY (store_id, product_id)
-);
 
 CREATE TABLE IF NOT EXISTS customer (
   id         SERIAL PRIMARY KEY,
@@ -49,7 +19,8 @@ CREATE TABLE IF NOT EXISTS customer (
 
 CREATE TABLE IF NOT EXISTS orders (
   id          SERIAL PRIMARY KEY,
-  store_id    INTEGER NOT NULL REFERENCES store(id),
+  -- código da EMPRESA no ERP (sem FK: a tabela mora no Firebird)
+  store_id    INTEGER NOT NULL,
   customer_id INTEGER NOT NULL REFERENCES customer(id),
   status      TEXT NOT NULL DEFAULT 'aberto'
               CHECK (status IN ('aberto', 'pago', 'concluido', 'cancelado')),
@@ -58,12 +29,18 @@ CREATE TABLE IF NOT EXISTS orders (
   paid_at     TIMESTAMPTZ
 );
 
+-- Item do pedido com SNAPSHOT do produto (código, EAN, nome e preço do
+-- cadastro no momento do scan): o pedido continua íntegro mesmo que o
+-- preço mude no ERP depois. qty em NUMERIC p/ peso (ex.: 1,500 kg).
 CREATE TABLE IF NOT EXISTS order_item (
-  order_id   INTEGER NOT NULL REFERENCES orders(id),
-  product_id INTEGER NOT NULL REFERENCES product(id),
-  qty        NUMERIC(10,3) NOT NULL CHECK (qty > 0),
-  unit_price NUMERIC(10,2) NOT NULL CHECK (unit_price >= 0),
-  PRIMARY KEY (order_id, product_id)
+  order_id     INTEGER NOT NULL REFERENCES orders(id),
+  product_code TEXT NOT NULL,
+  ean          TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  unit_type    TEXT NOT NULL DEFAULT 'un' CHECK (unit_type IN ('un', 'kg')),
+  qty          NUMERIC(10,3) NOT NULL CHECK (qty > 0),
+  unit_price   NUMERIC(10,2) NOT NULL CHECK (unit_price >= 0),
+  PRIMARY KEY (order_id, product_code)
 );
 
 CREATE TABLE IF NOT EXISTS payment (
@@ -79,20 +56,7 @@ CREATE TABLE IF NOT EXISTS payment (
   paid_at    TIMESTAMPTZ
 );
 
--- Todo movimento de estoque fica registrado (venda, reposição, quebra, ajuste)
-CREATE TABLE IF NOT EXISTS stock_movement (
-  id         SERIAL PRIMARY KEY,
-  store_id   INTEGER NOT NULL REFERENCES store(id),
-  product_id INTEGER NOT NULL REFERENCES product(id),
-  type       TEXT NOT NULL CHECK (type IN ('sale', 'restock', 'loss', 'adjustment')),
-  qty        NUMERIC(10,3) NOT NULL,
-  reason     TEXT,
-  order_id   INTEGER REFERENCES orders(id),
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE INDEX IF NOT EXISTS idx_orders_store_status ON orders (store_id, status, paid_at);
 CREATE INDEX IF NOT EXISTS idx_payment_order ON payment (order_id);
-CREATE INDEX IF NOT EXISTS idx_stock_movement_store ON stock_movement (store_id, product_id, created_at);
 
 COMMIT;

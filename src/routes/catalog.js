@@ -1,85 +1,99 @@
 import { Router } from 'express';
-import { query } from '../db.js';
+import { config } from '../config.js';
+import { fbQuery, fbText, ident } from '../firebird.js';
 import { notFound, wrap } from '../errors.js';
 
 export const catalogRouter = Router();
 
-// Lojas ativas (o app usa para o morador escolher a sua)
+const erp = config.erp;
+const dbPath = (req) => req.get('x-db-path') || undefined;
+
+const productSelect = () =>
+  `SELECT ${ident(erp.produtoCodigo)} AS CODE,
+          ${ident(erp.produtoEan)} AS EAN,
+          ${ident(erp.produtoNome)} AS PNAME,
+          ${ident(erp.produtoPreco)} AS PRICE
+     FROM ${ident(erp.produtoTable)}`;
+
+const mapProduct = (r) => ({
+  product_code: String(r.CODE),
+  ean: fbText(r.EAN),
+  name: fbText(r.PNAME),
+  price: Number(r.PRICE),
+  unit_type: 'un',
+  available: null, // estoque é controlado pelo ERP nesta fase
+});
+
+// Lojas = registros da tabela EMPRESA do ERP (Nome Fantasia).
+// Multi-loja de verdade (estoque/preço por unidade) fica para a fase da API.
 catalogRouter.get(
   '/stores',
-  wrap(async (_req, res) => {
-    const { rows } = await query(
-      `SELECT id, name, condo_id, address FROM store
-        WHERE status = 'ativa' ORDER BY name`,
+  wrap(async (req, res) => {
+    const rows = await fbQuery(
+      `SELECT ${ident(erp.empresaId)} AS ID,
+              ${ident(erp.empresaFantasia)} AS FANTASIA
+         FROM ${ident(erp.empresaTable)}
+        ORDER BY 2`,
+      [],
+      dbPath(req),
     );
-    res.json({ stores: rows });
+    res.json({
+      stores: rows.map((r) => ({ id: Number(r.ID), name: fbText(r.FANTASIA) })),
+    });
   }),
 );
 
-// Catálogo da loja: produtos com preço e disponibilidade daquela unidade
+// Catálogo: primeiros produtos do cadastro do ERP (com código de barras)
 catalogRouter.get(
   '/stores/:storeId/catalog',
   wrap(async (req, res) => {
-    const { storeId } = req.params;
-    const store = await query(
-      `SELECT id, name, condo_id, status FROM store WHERE id = $1`,
-      [storeId],
+    const rows = await fbQuery(
+      `SELECT FIRST 200 * FROM (${productSelect()}) p
+        WHERE p.EAN IS NOT NULL AND p.EAN <> ''
+        ORDER BY p.PNAME`,
+      [],
+      dbPath(req),
     );
-    if (store.rowCount === 0) throw notFound('loja não encontrada');
-
-    const { rows } = await query(
-      `SELECT p.id, p.ean, p.name, p.category, p.image_url, p.unit_type,
-              sp.price::float AS price, sp.qty::float AS available
-         FROM store_product sp
-         JOIN product p ON p.id = sp.product_id
-        WHERE sp.store_id = $1
-        ORDER BY p.category, p.name`,
-      [storeId],
-    );
-    res.json({ store: store.rows[0], products: rows });
+    res.json({
+      store: { id: Number(req.params.storeId) },
+      products: rows.map(mapProduct),
+    });
   }),
 );
 
-// Modo balança: a etiqueta impressa pela balança traz "2" + código do
-// produto (6 dígitos) + peso em gramas (5 dígitos) + verificador. Este
-// endpoint resolve o prefixo (2 + código) para o produto pesável da loja.
+// Scan: resolve o código de barras no cadastro de produtos do ERP
+catalogRouter.get(
+  '/stores/:storeId/products/ean/:ean',
+  wrap(async (req, res) => {
+    const rows = await fbQuery(
+      `SELECT FIRST 1 * FROM (${productSelect()}) p WHERE p.EAN = ?`,
+      [req.params.ean],
+      dbPath(req),
+    );
+    if (rows.length === 0)
+      throw notFound('produto não encontrado no cadastro do ERP');
+    res.json(mapProduct(rows[0]));
+  }),
+);
+
+// Modo balança: etiqueta "2" + código do produto (6 dígitos) + peso.
+// Resolve o prefixo para o produto pesável correspondente no ERP.
 catalogRouter.get(
   '/stores/:storeId/products/scale/:prefix',
   wrap(async (req, res) => {
-    const { storeId, prefix } = req.params;
+    const { prefix } = req.params;
     if (!/^2\d{6}$/.test(prefix))
       return res
         .status(400)
         .json({ error: 'prefixo de balança deve ser 2 + 6 dígitos' });
-    const { rows } = await query(
-      `SELECT p.id, p.ean, p.name, p.category, p.image_url, p.unit_type,
-              sp.price::float AS price, sp.qty::float AS available
-         FROM store_product sp
-         JOIN product p ON p.id = sp.product_id
-        WHERE sp.store_id = $1 AND p.unit_type = 'kg' AND p.ean LIKE $2 || '%'
-        ORDER BY p.ean LIMIT 1`,
-      [storeId, prefix],
+    const rows = await fbQuery(
+      `SELECT FIRST 1 * FROM (${productSelect()}) p
+        WHERE p.EAN LIKE ? ORDER BY p.EAN`,
+      [`${prefix}%`],
+      dbPath(req),
     );
     if (rows.length === 0)
-      throw notFound('produto de balança não encontrado nesta loja');
-    res.json(rows[0]);
-  }),
-);
-
-// Resolve um EAN escaneado para o produto/preço da loja atual
-catalogRouter.get(
-  '/stores/:storeId/products/ean/:ean',
-  wrap(async (req, res) => {
-    const { storeId, ean } = req.params;
-    const { rows } = await query(
-      `SELECT p.id, p.ean, p.name, p.category, p.image_url, p.unit_type,
-              sp.price::float AS price, sp.qty::float AS available
-         FROM store_product sp
-         JOIN product p ON p.id = sp.product_id
-        WHERE sp.store_id = $1 AND p.ean = $2`,
-      [storeId, ean],
-    );
-    if (rows.length === 0) throw notFound('produto não disponível nesta loja');
-    res.json(rows[0]);
+      throw notFound('produto de balança não encontrado no cadastro do ERP');
+    res.json({ ...mapProduct(rows[0]), unit_type: 'kg' });
   }),
 );

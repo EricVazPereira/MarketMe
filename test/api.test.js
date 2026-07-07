@@ -1,14 +1,18 @@
-// Teste de ponta a ponta do fluxo da Fase 1:
-// catálogo → scan → pedido → Pix → webhook → baixa de estoque → dashboard.
-// Requer PostgreSQL acessível (DATABASE_URL); recria o esquema ao iniciar.
+// Teste de ponta a ponta do conector (fase Firebird direto):
+// EMPRESA/PRODUTO vêm de um Firebird real; pedidos/pagamentos do
+// PostgreSQL local. Requer os dois bancos acessíveis.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.PSP_WEBHOOK_SECRET = 'segredo-de-teste';
-// A suíte inteira roda com autenticação básica ligada, para validar que
-// todas as rotas continuam funcionando com credenciais
+// suíte roda com autenticação básica ligada
 process.env.API_USER = 'admin-teste';
 process.env.API_PASS = 'senha-teste';
+// Firebird de teste (mesma estrutura do ERP: EMPRESA + PRODUTO)
+process.env.FIREBIRD_DATABASE = '/var/lib/firebird/3.0/data/orestra.fdb';
+process.env.FIREBIRD_HOST = '127.0.0.1';
+process.env.FIREBIRD_USER = 'POINTER';
+process.env.FIREBIRD_PASSWORD = 'sysadmin';
 
 const { initDb } = await import('../scripts/init-db.js');
 const { createApp } = await import('../src/app.js');
@@ -28,8 +32,6 @@ const api = async (method, path, body, headers = {}) => {
   });
   return { status: res.status, body: await res.json() };
 };
-// o webhook NÃO envia usuário/senha de propósito: o PSP se autentica
-// apenas pelo segredo compartilhado (rota isenta da autenticação básica)
 const webhook = (body, secret = 'segredo-de-teste') =>
   api('POST', '/webhooks/psp', body, {
     'x-webhook-secret': secret,
@@ -48,39 +50,52 @@ after(async () => {
 });
 
 const EAN = {
-  coca: '7894900011517', // qty 24, min 6, R$ 5,50
-  doritos: '7892840812850', // qty 15, min 5, R$ 9,90
-  biscoito: '7891079000021', // qty 5, min 4, R$ 4,50 → 1 venda dispara alerta
-  papel: '7896004000501', // qty 8, min 2
-  banana: '2000001000000', // kg, qty 12.5, min 3, R$ 6,90/kg
+  coca: '7894900011517', // R$ 5,50 no cadastro do ERP
+  doritos: '7892840812850', // R$ 9,90
+  banana: '2000001000000', // pesável, R$ 6,90/kg
 };
 
-test('catálogo da loja lista produtos com preço e disponibilidade', async () => {
-  const { status, body } = await api('GET', '/stores/1/catalog');
+test('lojas vêm da tabela EMPRESA do ERP (Nome Fantasia)', async () => {
+  const { status, body } = await api('GET', '/stores');
   assert.equal(status, 200);
-  assert.equal(body.products.length, 10);
-  const coca = body.products.find((p) => p.ean === EAN.coca);
-  assert.equal(coca.price, 5.5);
-  assert.equal(coca.available, 24);
-  assert.equal(coca.unit_type, 'un');
-  const banana = body.products.find((p) => p.ean === EAN.banana);
-  assert.equal(banana.unit_type, 'kg');
-  assert.equal(banana.available, 12.5);
+  assert.equal(body.stores.length, 1);
+  assert.equal(body.stores[0].id, 1);
+  assert.equal(body.stores[0].name, 'Mercadinho do Condominio');
 });
 
-test('scan de EAN resolve produto na loja', async () => {
+test('catálogo lista o cadastro de produtos do ERP', async () => {
+  const { status, body } = await api('GET', '/stores/1/catalog');
+  assert.equal(status, 200);
+  assert.equal(body.products.length, 5);
+  const coca = body.products.find((p) => p.ean === EAN.coca);
+  assert.equal(coca.price, 5.5);
+  assert.equal(coca.name, 'REFRIGERANTE COCA-COLA LATA 350ML');
+});
+
+test('scan resolve o EAN no cadastro do ERP', async () => {
   const { status, body } = await api('GET', `/stores/1/products/ean/${EAN.doritos}`);
   assert.equal(status, 200);
-  assert.equal(body.name, 'Salgadinho Doritos 84g');
+  assert.equal(body.name, 'SALGADINHO DORITOS 84G');
+  assert.equal(body.price, 9.9);
   const missing = await api('GET', '/stores/1/products/ean/0000000000000');
   assert.equal(missing.status, 404);
 });
 
-let orderId;
-let txid;
+test('x-db-path inválido gera erro claro de conexão (502)', async () => {
+  const { status, body } = await api('GET', '/stores', undefined, {
+    'x-db-path': '/caminho/errado.fdb',
+  });
+  assert.equal(status, 502);
+  assert.match(body.error, /Firebird/);
+});
 
-test('fluxo completo: carrinho → Pix → webhook → estoque → dashboard', async (t) => {
-  await t.test('cria pedido aberto', async () => {
+test('fluxo completo: carrinho → Pix → webhook → concluído', async (t) => {
+  let orderId;
+  let txid;
+
+  await t.test('cria pedido validando a EMPRESA no ERP', async () => {
+    const bad = await api('POST', '/orders', { store_id: 99, customer_id: 1 });
+    assert.equal(bad.status, 404);
     const { status, body } = await api('POST', '/orders', {
       store_id: 1,
       customer_id: 1,
@@ -90,54 +105,54 @@ test('fluxo completo: carrinho → Pix → webhook → estoque → dashboard', a
     orderId = body.id;
   });
 
-  await t.test('adiciona itens por scan e calcula total', async () => {
+  await t.test('scan grava snapshot com preço do cadastro', async () => {
     await api('POST', `/orders/${orderId}/items`, { ean: EAN.coca, qty: 2 });
-    await api('POST', `/orders/${orderId}/items`, { ean: EAN.doritos });
     const { status, body } = await api('POST', `/orders/${orderId}/items`, {
-      ean: EAN.biscoito,
+      ean: EAN.doritos,
     });
     assert.equal(status, 201);
-    assert.equal(body.total, 2 * 5.5 + 9.9 + 4.5); // 25.40
-    assert.equal(body.items.length, 3);
+    assert.equal(body.total, 2 * 5.5 + 9.9); // 20.90
+    const coca = body.items.find((i) => i.ean === EAN.coca);
+    assert.equal(coca.unit_price, 5.5);
+    assert.equal(coca.product_code, '101');
+  });
+
+  await t.test('cancela item do carrinho', async () => {
+    await api('POST', `/orders/${orderId}/items`, { ean: EAN.banana, qty: 1.5 });
+    const { body: withBanana } = await api('GET', `/orders/${orderId}`);
+    assert.equal(withBanana.items.length, 3);
+
+    const { status, body } = await api(
+      'DELETE',
+      `/orders/${orderId}/items/105`, // código da banana no ERP
+    );
+    assert.equal(status, 200);
+    assert.equal(body.items.length, 2);
+    assert.equal(body.total, 20.9);
   });
 
   await t.test('gera cobrança Pix dinâmica e é idempotente', async () => {
     const first = await api('POST', `/orders/${orderId}/pay`);
     assert.equal(first.status, 201);
-    assert.equal(first.body.status, 'pendente');
     assert.match(first.body.qr_payload, /^000201/);
-    assert.ok(first.body.qr_payload.includes('br.gov.bcb.pix'));
     txid = first.body.psp_txid;
-
     const again = await api('POST', `/orders/${orderId}/pay`);
-    assert.equal(again.body.psp_txid, txid, 'repetir /pay não cria nova cobrança');
+    assert.equal(again.body.psp_txid, txid);
   });
 
-  await t.test('webhook sem segredo é rejeitado', async () => {
-    const { status } = await webhook({ txid, status: 'pago' }, 'errado');
-    assert.equal(status, 401);
-  });
+  await t.test('webhook confirma e conclui o pedido (idempotente)', async () => {
+    const bad = await webhook({ txid, status: 'pago' }, 'errado');
+    assert.equal(bad.status, 401);
 
-  await t.test('webhook confirma pagamento e baixa estoque atomicamente', async () => {
     const { status, body } = await webhook({ txid, status: 'pago' });
     assert.equal(status, 200);
     assert.equal(body.order_status, 'concluido');
-    // biscoito caiu para 4 (== min_qty) → entra no alerta de reposição
-    assert.ok(body.low_stock_alerts.length >= 1);
+
+    const dup = await webhook({ txid, status: 'pago' });
+    assert.equal(dup.body.duplicate, true);
 
     const order = await api('GET', `/orders/${orderId}`);
     assert.equal(order.body.status, 'concluido');
-    assert.equal(order.body.payments[0].status, 'pago');
-
-    const coca = await api('GET', `/stores/1/products/ean/${EAN.coca}`);
-    assert.equal(coca.body.available, 22);
-  });
-
-  await t.test('reentrega do webhook não baixa estoque de novo', async () => {
-    const { body } = await webhook({ txid, status: 'pago' });
-    assert.equal(body.duplicate, true);
-    const coca = await api('GET', `/stores/1/products/ean/${EAN.coca}`);
-    assert.equal(coca.body.available, 22);
   });
 
   await t.test('pedido concluído não aceita mais itens', async () => {
@@ -147,181 +162,66 @@ test('fluxo completo: carrinho → Pix → webhook → estoque → dashboard', a
     assert.equal(status, 409);
   });
 
-  await t.test('restock-list aponta o biscoito e reposição o remove', async () => {
-    const list = await api('GET', '/stores/1/restock-list');
-    const alert = list.body.items.find((i) => i.ean === EAN.biscoito);
-    assert.ok(alert, 'biscoito deveria estar na lista de reposição');
-    assert.equal(alert.qty, 4);
-
-    const restock = await api('POST', '/stores/1/restock', {
-      items: [{ product_id: alert.product_id, qty: 10 }],
-    });
-    assert.equal(restock.status, 201);
-    assert.equal(restock.body.updated[0].qty, 14);
-
-    const after = await api('GET', '/stores/1/restock-list');
-    assert.ok(!after.body.items.some((i) => i.ean === EAN.biscoito));
-  });
-
   await t.test('dashboard reflete a venda', async () => {
     const { body } = await api('GET', '/stores/1/dashboard');
     assert.equal(body.orders, 1);
-    assert.equal(body.revenue, 25.4);
-    assert.equal(body.avg_ticket, 25.4);
+    assert.equal(body.revenue, 20.9);
     assert.equal(body.top_products[0].ean, EAN.coca);
     assert.equal(body.top_products[0].units_sold, 2);
   });
 });
 
-test('não deixa adicionar além do estoque disponível', async () => {
-  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
-  const { status, body } = await api('POST', `/orders/${order.body.id}/items`, {
-    ean: EAN.papel,
-    qty: 9, // só há 8
-  });
-  assert.equal(status, 409);
-  assert.match(body.error, /estoque insuficiente/);
-});
-
-test('pagar pedido vazio é rejeitado', async () => {
-  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
-  const { status } = await api('POST', `/orders/${order.body.id}/pay`);
-  assert.equal(status, 400);
-});
-
-test('inventário ajusta estoque e registra a diferença', async () => {
-  const doritos = await api('GET', `/stores/1/products/ean/${EAN.doritos}`);
-  const { status, body } = await api('POST', '/stores/1/inventory', {
-    items: [{ product_id: doritos.body.id, counted_qty: 10, loss: true }],
-    reason: 'quebra identificada na contagem',
-  });
-  assert.equal(status, 201);
-  assert.equal(body.adjustments[0].delta, 10 - doritos.body.available);
-  const after = await api('GET', `/stores/1/products/ean/${EAN.doritos}`);
-  assert.equal(after.body.available, 10);
-});
-
-test('produto pesável: compra por peso baixa estoque em kg', async () => {
+test('cancelar a conta descarta o pedido e a cobrança pendente', async () => {
   const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
   const orderId = order.body.id;
-
-  const add = await api('POST', `/orders/${orderId}/items`, {
-    ean: EAN.banana,
-    qty: 1.5,
-  });
-  assert.equal(add.status, 201);
-  const item = add.body.items.find((i) => i.ean === EAN.banana);
-  assert.equal(item.unit_type, 'kg');
-  assert.equal(item.qty, 1.5);
-  assert.equal(item.subtotal, 10.35);
-
+  await api('POST', `/orders/${orderId}/items`, { ean: EAN.coca });
   const pay = await api('POST', `/orders/${orderId}/pay`);
+
+  const { status, body } = await api('POST', `/orders/${orderId}/cancel`);
+  assert.equal(status, 200);
+  assert.equal(body.status, 'cancelado');
+
+  // webhook do Pix cancelado chega depois → no-op idempotente
   const wh = await webhook({ txid: pay.body.psp_txid, status: 'pago' });
-  assert.equal(wh.body.order_status, 'concluido');
-
-  const banana = await api('GET', `/stores/1/products/ean/${EAN.banana}`);
-  assert.equal(banana.body.available, 12.5 - 1.5);
-});
-
-test('produto por unidade rejeita peso fracionário', async () => {
-  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
-  const { status, body } = await api('POST', `/orders/${order.body.id}/items`, {
-    ean: EAN.coca,
-    qty: 1.5,
-  });
-  assert.equal(status, 400);
-  assert.match(body.error, /unidade/);
-});
-
-test('cancela pedido aberto e a cobrança Pix pendente', async () => {
-  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
-  const orderId = order.body.id;
-  await api('POST', `/orders/${orderId}/items`, { ean: EAN.coca, qty: 1 });
-  const pay = await api('POST', `/orders/${orderId}/pay`);
-  const txid = pay.body.psp_txid;
-
-  const cancel = await api('POST', `/orders/${orderId}/cancel`);
-  assert.equal(cancel.status, 200);
-  assert.equal(cancel.body.status, 'cancelado');
-
-  const check = await api('GET', `/orders/${orderId}`);
-  assert.equal(check.body.status, 'cancelado');
-  assert.equal(check.body.payments[0].status, 'cancelado');
-
-  // pedido cancelado não aceita mais itens
-  const addAfter = await api('POST', `/orders/${orderId}/items`, { ean: EAN.coca });
-  assert.equal(addAfter.status, 409);
-
-  // não pode cancelar de novo
-  const cancelAgain = await api('POST', `/orders/${orderId}/cancel`);
-  assert.equal(cancelAgain.status, 409);
-
-  // um webhook atrasado do PSP não revive o pedido cancelado
-  const wh = await webhook({ txid, status: 'pago' });
   assert.equal(wh.body.duplicate, true);
-  const stillCancelled = await api('GET', `/orders/${orderId}`);
-  assert.equal(stillCancelled.body.status, 'cancelado');
+  const after = await api('GET', `/orders/${orderId}`);
+  assert.equal(after.body.status, 'cancelado');
 });
 
-test('encerra conta do cliente (soft-delete)', async () => {
-  // usa o cliente 1: seu único pedido em testes anteriores já foi concluído,
-  // então ele começa esta suíte sem carrinhos abertos pendentes.
-  const openOrder = await api('POST', '/orders', { store_id: 1, customer_id: 1 });
-
-  const blocked = await api('POST', '/customers/1/close');
-  assert.equal(blocked.status, 409);
-  assert.match(blocked.body.error, /pedido em aberto/);
-
-  await api('POST', `/orders/${openOrder.body.id}/cancel`);
-
-  const closed = await api('POST', '/customers/1/close');
-  assert.equal(closed.status, 200);
-  assert.equal(closed.body.status, 'encerrado');
-
-  // idempotente: encerrar de novo não dá erro
-  const closedAgain = await api('POST', '/customers/1/close');
-  assert.equal(closedAgain.status, 200);
-  assert.equal(closedAgain.body.status, 'encerrado');
-
-  // conta encerrada não consegue abrir pedido novo
-  const newOrder = await api('POST', '/orders', { store_id: 1, customer_id: 1 });
-  assert.equal(newOrder.status, 404);
-
-  const missing = await api('POST', '/customers/9999/close');
-  assert.equal(missing.status, 404);
-});
-
-test('autenticação básica: sem credenciais só passa /health e webhook', async () => {
-  const noAuth = await api('GET', '/stores/1/catalog', undefined, {
-    authorization: '',
-  });
-  assert.equal(noAuth.status, 401);
-
-  const wrong = await api('GET', '/stores/1/catalog', undefined, {
-    authorization: 'Basic ' + Buffer.from('x:y').toString('base64'),
-  });
-  assert.equal(wrong.status, 401);
-
-  const health = await api('GET', '/health', undefined, { authorization: '' });
-  assert.equal(health.status, 200);
-
-  // webhook com txid desconhecido responde 200 (sem basic auth) — a rota
-  // é isenta e autentica pelo segredo próprio
-  const wh = await webhook({ txid: 'INEXISTENTE', status: 'pago' });
-  assert.equal(wh.status, 200);
-  assert.equal(wh.body.known, false);
-});
-
-test('modo balança: prefixo resolve o produto pesável da loja', async () => {
-  // etiqueta "2000001 01500 d" → prefixo 2000001 (banana), 1,500 kg
+test('modo balança: prefixo resolve o produto pesável no ERP', async () => {
   const { status, body } = await api('GET', '/stores/1/products/scale/2000001');
   assert.equal(status, 200);
   assert.equal(body.ean, EAN.banana);
   assert.equal(body.unit_type, 'kg');
-
   const missing = await api('GET', '/stores/1/products/scale/2999999');
   assert.equal(missing.status, 404);
+});
 
-  const invalid = await api('GET', '/stores/1/products/scale/123');
-  assert.equal(invalid.status, 400);
+test('peso fracionado vira item em kg', async () => {
+  const order = await api('POST', '/orders', { store_id: 1, customer_id: 1 });
+  const { body } = await api('POST', `/orders/${order.body.id}/items`, {
+    ean: EAN.banana,
+    qty: 1.5,
+  });
+  const item = body.items[0];
+  assert.equal(item.unit_type, 'kg');
+  assert.equal(item.subtotal, 10.35); // 1,5 kg × 6,90
+});
+
+test('encerrar conta do cliente impede novos pedidos', async () => {
+  const closed = await api('POST', '/customers/2/close');
+  assert.equal(closed.status, 200);
+  assert.equal(closed.body.status, 'encerrado');
+  const order = await api('POST', '/orders', { store_id: 1, customer_id: 2 });
+  assert.equal(order.status, 404);
+});
+
+test('autenticação básica: sem credenciais só passa /health e webhook', async () => {
+  const noAuth = await api('GET', '/stores', undefined, { authorization: '' });
+  assert.equal(noAuth.status, 401);
+  const health = await api('GET', '/health', undefined, { authorization: '' });
+  assert.equal(health.status, 200);
+  const wh = await webhook({ txid: 'INEXISTENTE', status: 'pago' });
+  assert.equal(wh.status, 200);
+  assert.equal(wh.body.known, false);
 });

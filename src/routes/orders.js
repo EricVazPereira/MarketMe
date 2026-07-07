@@ -1,9 +1,14 @@
 import { Router } from 'express';
 import { query, withTransaction } from '../db.js';
+import { config } from '../config.js';
+import { fbQuery, fbText, ident } from '../firebird.js';
 import { badRequest, conflict, notFound, wrap } from '../errors.js';
 import { buildBrCode, generateTxid } from '../services/pix.js';
 
 export const ordersRouter = Router();
+
+const erp = config.erp;
+const dbPath = (req) => req.get('x-db-path') || undefined;
 
 async function loadOrder(orderId, client = { query }) {
   const { rows } = await client.query(
@@ -18,19 +23,27 @@ async function loadOrder(orderId, client = { query }) {
 
 async function orderItems(orderId) {
   const { rows } = await query(
-    `SELECT oi.product_id, p.ean, p.name, p.unit_type, oi.qty::float AS qty,
-            oi.unit_price::float AS unit_price,
+    `SELECT oi.product_code, oi.ean, oi.name, oi.unit_type,
+            oi.qty::float AS qty, oi.unit_price::float AS unit_price,
             (oi.qty * oi.unit_price)::float AS subtotal
        FROM order_item oi
-       JOIN product p ON p.id = oi.product_id
       WHERE oi.order_id = $1
-      ORDER BY p.name`,
+      ORDER BY oi.name`,
     [orderId],
   );
   return rows;
 }
 
-// Abre um pedido (carrinho) na loja
+const recomputeTotal = (client, orderId) =>
+  client.query(
+    `UPDATE orders o SET total = (
+       SELECT COALESCE(SUM(qty * unit_price), 0)
+         FROM order_item WHERE order_id = o.id
+     ) WHERE o.id = $1`,
+    [orderId],
+  );
+
+// Abre um pedido (carrinho) na loja (= EMPRESA do ERP)
 ordersRouter.post(
   '/orders',
   wrap(async (req, res) => {
@@ -38,11 +51,15 @@ ordersRouter.post(
     if (!store_id || !customer_id)
       throw badRequest('store_id e customer_id são obrigatórios');
 
-    const store = await query(
-      `SELECT id FROM store WHERE id = $1 AND status = 'ativa'`,
+    const empresa = await fbQuery(
+      `SELECT FIRST 1 ${ident(erp.empresaId)} AS ID
+         FROM ${ident(erp.empresaTable)} WHERE ${ident(erp.empresaId)} = ?`,
       [store_id],
+      dbPath(req),
     );
-    if (store.rowCount === 0) throw notFound('loja não encontrada ou inativa');
+    if (empresa.length === 0)
+      throw notFound('empresa não encontrada no banco do ERP');
+
     const customer = await query(
       `SELECT id FROM customer WHERE id = $1 AND status = 'ativo'`,
       [customer_id],
@@ -60,66 +77,61 @@ ordersRouter.post(
   }),
 );
 
-// Scan de EAN: adiciona (ou incrementa) item no carrinho.
-// Para produtos por unidade, qty é a contagem (inteiro >= 1).
-// Para produtos por peso (unit_type = 'kg'), qty é o peso em kg (ex.: 0.5).
+// Scan de EAN: busca o produto no cadastro do ERP (Firebird) e grava o
+// item com o preço do cadastro (snapshot). qty inteira para unidade;
+// fracionada quando vem de balança/pesagem (tratada como kg).
 ordersRouter.post(
   '/orders/:orderId/items',
   wrap(async (req, res) => {
     const { orderId } = req.params;
     const { ean, qty = 1 } = req.body ?? {};
     if (!ean) throw badRequest('ean é obrigatório');
-    const rawQty = Number(qty);
-    if (!Number.isFinite(rawQty) || rawQty <= 0)
+    const addQty = Number(qty);
+    if (!Number.isFinite(addQty) || addQty <= 0)
       throw badRequest('qty deve ser um número > 0');
+
+    const found = await fbQuery(
+      `SELECT FIRST 1 ${ident(erp.produtoCodigo)} AS CODE,
+              ${ident(erp.produtoEan)} AS EAN,
+              ${ident(erp.produtoNome)} AS PNAME,
+              ${ident(erp.produtoPreco)} AS PRICE
+         FROM ${ident(erp.produtoTable)}
+        WHERE ${ident(erp.produtoEan)} = ?`,
+      [ean],
+      dbPath(req),
+    );
+    if (found.length === 0)
+      throw notFound('produto não encontrado no cadastro do ERP');
+    const product = {
+      code: String(found[0].CODE),
+      ean: fbText(found[0].EAN),
+      name: fbText(found[0].PNAME),
+      price: Number(found[0].PRICE),
+    };
+    if (!(product.price >= 0))
+      throw conflict('produto sem preço de venda no cadastro do ERP');
 
     const order = await withTransaction(async (client) => {
       const ord = await loadOrder(orderId, client);
       if (ord.status !== 'aberto')
         throw conflict(`pedido não está aberto (status: ${ord.status})`);
 
-      const { rows: found } = await client.query(
-        `SELECT sp.product_id, sp.price::float AS price, sp.qty::float AS available,
-                p.unit_type
-           FROM store_product sp
-           JOIN product p ON p.id = sp.product_id
-          WHERE sp.store_id = $1 AND p.ean = $2
-          FOR UPDATE OF sp`,
-        [ord.store_id, ean],
-      );
-      if (found.length === 0)
-        throw notFound('produto não disponível nesta loja');
-      const { product_id, price, available, unit_type } = found[0];
-
-      if (unit_type === 'un' && !Number.isInteger(rawQty))
-        throw badRequest('este produto é vendido por unidade; qty deve ser inteiro');
-      const addQty = rawQty;
-
-      const { rows: existing } = await client.query(
-        `SELECT qty::float AS qty FROM order_item WHERE order_id = $1 AND product_id = $2`,
-        [orderId, product_id],
-      );
-      const inCart = existing.length > 0 ? existing[0].qty : 0;
-      const EPS = 1e-9;
-      if (inCart + addQty > available + EPS)
-        throw conflict(
-          `estoque insuficiente (disponível: ${available}, no carrinho: ${inCart})`,
-        );
-
       await client.query(
-        `INSERT INTO order_item (order_id, product_id, qty, unit_price)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (order_id, product_id)
+        `INSERT INTO order_item (order_id, product_code, ean, name, unit_type, qty, unit_price)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (order_id, product_code)
          DO UPDATE SET qty = order_item.qty + EXCLUDED.qty`,
-        [orderId, product_id, addQty, price],
+        [
+          orderId,
+          product.code,
+          product.ean,
+          product.name,
+          Number.isInteger(addQty) ? 'un' : 'kg',
+          addQty,
+          product.price,
+        ],
       );
-      await client.query(
-        `UPDATE orders o SET total = (
-           SELECT COALESCE(SUM(qty * unit_price), 0)
-             FROM order_item WHERE order_id = o.id
-         ) WHERE o.id = $1`,
-        [orderId],
-      );
+      await recomputeTotal(client, orderId);
       return loadOrder(orderId, client);
     });
 
@@ -127,34 +139,28 @@ ordersRouter.post(
   }),
 );
 
-// Remove um item do carrinho
+// Cancela (remove) um item do carrinho
 ordersRouter.delete(
-  '/orders/:orderId/items/:productId',
+  '/orders/:orderId/items/:productCode',
   wrap(async (req, res) => {
-    const { orderId, productId } = req.params;
+    const { orderId, productCode } = req.params;
     const order = await withTransaction(async (client) => {
       const ord = await loadOrder(orderId, client);
       if (ord.status !== 'aberto')
         throw conflict(`pedido não está aberto (status: ${ord.status})`);
       const del = await client.query(
-        `DELETE FROM order_item WHERE order_id = $1 AND product_id = $2`,
-        [orderId, productId],
+        `DELETE FROM order_item WHERE order_id = $1 AND product_code = $2`,
+        [orderId, productCode],
       );
       if (del.rowCount === 0) throw notFound('item não está no carrinho');
-      await client.query(
-        `UPDATE orders o SET total = (
-           SELECT COALESCE(SUM(qty * unit_price), 0)
-             FROM order_item WHERE order_id = o.id
-         ) WHERE o.id = $1`,
-        [orderId],
-      );
+      await recomputeTotal(client, orderId);
       return loadOrder(orderId, client);
     });
     res.json({ ...order, items: await orderItems(orderId) });
   }),
 );
 
-// Cancela um pedido aberto e a cobrança Pix pendente associada, se houver.
+// Cancela a conta/pedido inteiro (e a cobrança Pix pendente, se houver).
 // A checagem final é condicional (WHERE status = 'aberto') para não
 // sobrescrever um pedido que a confirmação do PSP tenha concluído
 // concorrentemente enquanto o cliente cancelava.

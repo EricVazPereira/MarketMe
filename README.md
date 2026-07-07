@@ -1,232 +1,157 @@
 # MarketMe
 
-Backend de **mini-mercado autônomo de condomínio** (scan & pay, sem
-funcionário no local). Baseado na pesquisa de mercado em
-[`PESQUISA_MERCADO_AUTONOMO.md`](./PESQUISA_MERCADO_AUTONOMO.md).
+Mini-mercado autônomo (scan & pay) integrado ao **ERP existente**:
+cadastros de empresa e produtos vêm do banco **Firebird** do ERP
+(`orestra.fdb`), em acesso direto nesta fase. Pesquisa de mercado que
+embasa o produto: [`PESQUISA_MERCADO_AUTONOMO.md`](./PESQUISA_MERCADO_AUTONOMO.md).
 
-Este repositório implementa a **Fase 1 (MVP funcional)** do roadmap:
+## Arquitetura (fase atual — Firebird direto)
 
-- ✅ Catálogo por loja + resolução de EAN escaneado no app
-- ✅ Carrinho → pedido → **Pix dinâmico** (BR Code copia-e-cola) com webhook
-- ✅ Baixa de estoque **atômica** na confirmação do pagamento
-- ✅ Alerta de estoque mínimo + lista de reposição + registro de inventário
-- ✅ Dashboard simples por loja (faturamento, ticket médio, top produtos)
-- ✅ Cancelamento de pedido/carrinho (com cancelamento da cobrança Pix)
-- ✅ Encerramento de conta do cliente (soft-delete)
-- ✅ Produtos vendidos por peso (hortifruti, açougue) — preço/kg, estoque
-  fracionário e fluxo de pesagem no app
-- ✅ Autenticação básica opcional das APIs (usuário/senha via `.env`)
-- ✅ Modo balança: leitura do peso embutido na etiqueta EAN-13 da balança
+```
+Tablet (APK MarketMe)
+   │  HTTP na rede local (envia o "diretório do banco" configurado no app)
+   ▼
+Conector no PC (Node)  ──►  Firebird do ERP (D:\marketme\bd\orestra.fdb)
+   │                          • EMPRESA  → loja (Nome Fantasia)
+   │                          • PRODUTO  → scan por código de barras + preço
+   ▼
+PostgreSQL local        ──►  pedidos, itens (snapshot), pagamentos Pix
+```
 
-> Fora de escopo (decisão de produto): **não** haverá desenvolvimento de
-> IA/visão computacional para antifurto. Os demais itens das Fases 2 e 3
-> (multi-loja avançado, repasse ao condomínio, carteira, Pix direto no
-> PSP) ficam para as próximas fases.
+- O tablet **não abre o .fdb sozinho** (o arquivo está no disco do PC);
+  o conector é a ponte mínima até lá. Na próxima fase, o conector é
+  substituído pelo **servidor de API** — o app já tem os campos de
+  endereço/token/senha de API guardados (ainda sem uso).
+- O estoque **não é movimentado** nesta fase: ele pertence ao ERP.
+- Cada item vendido guarda **snapshot** de código, EAN, nome e preço do
+  cadastro no momento do scan.
 
-## Stack
+## O que o cliente consegue fazer no app
 
-- **Node.js 20+** com Express
-- **PostgreSQL** (SQL puro via `pg`, transações explícitas)
-- Testes de ponta a ponta com `node:test` (sem framework extra)
+- Ver o catálogo (produtos com código de barras do cadastro do ERP)
+- Escanear pela **câmera**, digitar o código ou usar **leitor físico**
+  (Bluetooth/USB em modo teclado — o app captura a "rajada" + Enter)
+- Produtos pesáveis: digitar o peso ou ler etiqueta de balança
+  (modo balança nas configurações)
+- **Cancelar item** do carrinho e **cancelar a conta** (pedido inteiro,
+  inclusive na tela do Pix — a cobrança pendente é cancelada junto)
+- Pagar com **Pix copia-e-cola** e ver a confirmação na tela
 
-## Como rodar
+## Como rodar (no PC com o Firebird)
 
 ```bash
-# 1. Dependências
 npm install
 
-# 2. Banco — caminho automático (recomendado): encontra o PostgreSQL,
-#    cria um usuário/banco EXCLUSIVOS do MarketMe com senha gerada
-#    automaticamente (não reaproveita credenciais de outros bancos ou
-#    sistemas que você já tenha, como Firebird), grava o .env e cria
-#    as tabelas + dados de exemplo
+# PostgreSQL local (pedidos): cria usuário/banco e grava o .env
 npm run db:setup
 
-#    …ou caminho manual:
-#    cp .env.example .env  (ajuste DATABASE_URL com SUAS credenciais)
-#    CREATE ROLE meu_usuario LOGIN PASSWORD 'minha_senha'; CREATE DATABASE marketme OWNER meu_usuario;
-#    npm run db:init          # cria esquema + dados de exemplo
-#    npm run db:init -- --reset  # recria do zero (apaga tudo!)
+# Ajuste o .env: caminho do Firebird e credenciais (POINTER/sysadmin)
+#   FIREBIRD_DATABASE=D:\marketme\bd\orestra.fdb
 
-# 3. API
-npm start               # ou: npm run dev (com reload)
-
-# 4. Testes (recriam o esquema no banco configurado)
-npm test
+npm start          # conector em http://localhost:3000
+npm test           # requer PostgreSQL e um Firebird de teste
 ```
 
-### Esqueci a senha do postgres
+No app (tablet): Configurações → **diretório do banco de dados**
+(`D:\marketme\bd\orestra.fdb`), **endereço do conector**
+(`http://IP-DO-PC:3000`) → "Buscar empresa/loja" → salvar.
 
-O `npm run db:setup` pede a senha do superusuário `postgres` (definida na
-instalação do PostgreSQL) só para criar o usuário/banco do MarketMe uma
-única vez. Se não lembrar essa senha (comum quando o PostgreSQL foi
-instalado há tempos), redefina-a — não apaga nenhum dado:
+### Firebird 3.0+ (se o conector não conectar)
 
-1. Localize `pg_hba.conf` (Windows: normalmente em
-   `C:\Program Files\PostgreSQL\<versão>\data\pg_hba.conf`).
-2. Abra como Administrador e troque o método `scram-sha-256` (ou `md5`)
-   para `trust` nas linhas `host` com `127.0.0.1/32` e `::1/128`.
-3. Reinicie o serviço (`services.msc` → `postgresql-x64-...` → Reiniciar).
-4. Conecte sem senha e defina uma nova:
-   ```
-   psql -U postgres -h 127.0.0.1
-   ALTER USER postgres PASSWORD 'nova_senha_aqui';
-   \q
-   ```
-5. Reverta o `pg_hba.conf` para o método original e reinicie o serviço
-   de novo.
-6. Rode `npm run db:setup` e use `nova_senha_aqui`.
-
-## Fluxo da compra (o coração do sistema)
+O driver Node usa o protocolo legado. No `firebird.conf` do servidor:
 
 ```
-morador escaneia EAN ─► POST /orders/:id/items (valida estoque da loja)
-        │
-        ▼
-POST /orders/:id/pay ─► gera Pix dinâmico (txid + copia-e-cola) — idempotente
-        │
-        ▼
-PSP confirma ─► POST /webhooks/psp  ─┐ mesma transação:
-                                     ├ payment → pago
-                                     ├ baixa de estoque + stock_movement
-                                     ├ pedido → concluído
-                                     └ alerta se qty ≤ min_qty
+AuthServer = Srp256, Srp, Legacy_Auth
+UserManager = Srp, Legacy_UserManager
+WireCrypt = Disabled
 ```
 
-Regras críticas seguidas (seção 6 da pesquisa):
+Reinicie o serviço do Firebird e garanta que o usuário existe também no
+plugin legado: `CREATE USER POINTER PASSWORD 'sysadmin' USING PLUGIN
+Legacy_UserManager;`. **Firebird 2.5 funciona sem nenhum ajuste.**
 
-- O pedido **só conclui após o webhook** do PSP — nunca no clique do cliente.
-- `/pay` e o webhook são **idempotentes** (reenvio do PSP não baixa estoque
-  nem cobra duas vezes).
-- Baixa de estoque **na mesma transação** da confirmação do pagamento.
-- Preço e estoque são **por loja** (`store_product`), não globais.
+### Mapeamento de tabelas do ERP
 
-## Endpoints
+Padrões usados (ajuste no `.env` se os nomes forem outros):
 
-### App do cliente
-
-| Método | Rota | Descrição |
+| O quê | Tabela/campo padrão | Variável |
 |---|---|---|
-| GET | `/stores` | Lojas ativas (seleção no app) |
-| GET | `/stores/:id/catalog` | Catálogo com preço/estoque da loja |
-| GET | `/stores/:id/products/ean/:ean` | Resolve EAN escaneado |
-| GET | `/stores/:id/products/scale/:prefix` | Modo balança: resolve o prefixo `2` + código (6 dígitos) da etiqueta para o produto pesável |
-| POST | `/orders` | Abre pedido (`{store_id, customer_id}`) |
-| POST | `/orders/:id/items` | Adiciona item (`{ean, qty?}`) — `qty` é contagem para produto por unidade, ou peso em kg para produto por peso |
-| DELETE | `/orders/:id/items/:productId` | Remove item do carrinho |
-| POST | `/orders/:id/cancel` | Cancela pedido aberto (e a cobrança Pix pendente) |
-| POST | `/orders/:id/pay` | Gera cobrança Pix dinâmica |
-| GET | `/orders/:id` | Status do pedido (polling do app) |
-| POST | `/customers/:id/close` | Encerra a conta do cliente (soft-delete; recusa se houver pedido aberto) |
+| Loja | `EMPRESA` | `FB_EMPRESA_TABLE` |
+| Nome exibido | `NOME_FANTASIA` | `FB_EMPRESA_FANTASIA` |
+| Código da empresa | `CODIGO` | `FB_EMPRESA_ID` |
+| Produtos | `PRODUTO` | `FB_PRODUTO_TABLE` |
+| Código de barras | `CODIGO_BARRA` | `FB_PRODUTO_EAN` |
+| Descrição | `DESCRICAO` | `FB_PRODUTO_NOME` |
+| Preço de venda | `PRECO_VENDA` | `FB_PRODUTO_PRECO` |
 
-### Integração PSP
+## Endpoints do conector
 
-| Método | Rota | Descrição |
-|---|---|---|
-| POST | `/webhooks/psp` | Confirmação de pagamento (`{txid, status}`, header `x-webhook-secret`) |
+| Método | Rota | Fonte | Descrição |
+|---|---|---|---|
+| GET | `/stores` | Firebird | Empresas do ERP (Nome Fantasia) |
+| GET | `/stores/:id/catalog` | Firebird | Produtos com código de barras |
+| GET | `/stores/:id/products/ean/:ean` | Firebird | Resolve scan |
+| GET | `/stores/:id/products/scale/:prefix` | Firebird | Etiqueta de balança |
+| POST | `/orders` | PostgreSQL | Abre pedido (valida EMPRESA no ERP) |
+| POST | `/orders/:id/items` | ambos | Scan → snapshot com preço do cadastro |
+| DELETE | `/orders/:id/items/:productCode` | PostgreSQL | Cancela item |
+| POST | `/orders/:id/cancel` | PostgreSQL | Cancela a conta/pedido |
+| POST | `/orders/:id/pay` | PostgreSQL | Pix dinâmico (idempotente) |
+| GET | `/orders/:id` | PostgreSQL | Status (polling do app) |
+| POST | `/webhooks/psp` | PostgreSQL | Confirmação Pix (idempotente) |
+| POST | `/customers` / `/customers/:id/close` | PostgreSQL | Cliente do app |
+| GET | `/stores/:id/dashboard` | PostgreSQL | Vendas do app por período |
 
-### Operador / reposição
+Todas as rotas aceitam o header `x-db-path` (o "diretório do banco" do
+app) para apontar o Firebird; sem ele vale o `FIREBIRD_DATABASE` do `.env`.
 
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/stores/:id/restock-list` | Itens em `qty ≤ min_qty` + sugestão |
-| POST | `/stores/:id/restock` | Registra reposição (`{items: [{product_id, qty}]}`) |
-| POST | `/stores/:id/inventory` | Contagem/ajuste (`{items: [{product_id, counted_qty, loss?}]}`) |
+## Leitor de código de barras no tablet
 
-### Backoffice
+Três opções, da mais simples à mais robusta:
 
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/stores/:id/dashboard` | Faturamento, pedidos, ticket médio, top 10 produtos (`?from&to`) |
+1. **Câmera do tablet** (já funciona) — zero custo; exige boa luz e foco.
+2. **Leitor Bluetooth em "modo HID/teclado"** (~R$ 150-400) — pareia como
+   teclado; o app já captura a leitura em qualquer tela. Recomendado para
+   balcão/totem.
+3. **Leitor USB com adaptador OTG** — idem ao Bluetooth, via cabo; bom
+   quando o tablet fica fixo carregando na base.
 
-## Modelo de dados
+Não é preciso mudar nada no app para as opções 2 e 3 — qualquer leitor
+que "digite" o código e envie Enter funciona.
 
-Núcleo da seção 5 da pesquisa (sem `theft_alert` e `payout`, que são de
-fases futuras): `store`, `product`, `store_product` (preço/estoque por
-loja), `customer`, `orders`/`order_item`, `payment`, `stock_movement`
-(todo movimento — venda, reposição, quebra, ajuste — fica auditável).
-
-- `product.unit_type` (`un` | `kg`) diferencia produto por unidade de
-  produto por peso; `store_product.qty`/`min_qty` e `order_item.qty` são
-  `NUMERIC` para suportar peso fracionário (ex.: 1,500 kg).
-- `customer.status` (`ativo` | `encerrado`) é o soft-delete da conta.
-- `orders.status`/`payment.status` incluem `cancelado`.
-
-## Configuração
-
-Toda configuração sensível do sistema fica **no servidor**, no arquivo
-`.env` (veja [`.env.example`](./.env.example)):
+## Configuração (.env do conector)
 
 | Variável | O que configura |
 |---|---|
-| `DATABASE_URL` | Caminho/credenciais do banco PostgreSQL |
-| `PORT` | Porta da API |
+| `FIREBIRD_DATABASE/HOST/PORT/USER/PASSWORD` | Firebird do ERP |
+| `FB_*` | Nomes de tabelas/campos do ERP |
+| `DATABASE_URL` | PostgreSQL local (pedidos/pagamentos) |
+| `PORT` | Porta do conector |
 | `PIX_KEY`, `PIX_MERCHANT_*` | Dados do recebedor Pix (BR Code) |
-| `PSP_WEBHOOK_SECRET` | Segredo que autentica o webhook do PSP |
-| `API_USER`, `API_PASS` | Autenticação básica das APIs (opcional) |
+| `PSP_WEBHOOK_SECRET` | Segredo do webhook do PSP |
+| `API_USER`, `API_PASS` | Autenticação básica das rotas (opcional) |
 
-A tela de **Configurações do app** guarda apenas o que é do aparelho:
-endereço da API, usuário/senha da API (se habilitados no servidor),
-loja, cliente e **balança integrada (sim/não)**. O caminho do banco de
-dados fica de fora do app de propósito: o celular nunca fala com o
-PostgreSQL diretamente — expor essas credenciais em cada aparelho
-permitiria a qualquer morador ler o banco inteiro.
+### Esqueci a senha do postgres
 
-### Modo balança
+O `npm run db:setup` pede a senha do superusuário `postgres` uma única
+vez. Se não lembrar: edite `pg_hba.conf` (em `C:\Program Files\
+PostgreSQL\<versão>\data\`) trocando `scram-sha-256` por `trust` nas
+linhas `host` de `127.0.0.1/32` e `::1/128`, reinicie o serviço
+(`services.msc`), rode o setup (qualquer senha serve), e reverta a
+alteração se quiser exigir senha de novo.
 
-Com **balança = sim**, o app interpreta etiquetas EAN-13 de balança no
-padrão brasileiro `2 CCCCCC WWWWW D` (prefixo `2`, código do produto,
-peso em gramas, dígito verificador): ao escanear, o peso vem da própria
-etiqueta e o item entra no carrinho sem perguntar nada. Com
-**balança = não** (padrão), o app abre um campo pedindo o peso em kg.
-Ex.: etiqueta `2000001015004` → produto `2000001` (banana), 1,500 kg.
-
-Esquema em [`db/schema.sql`](./db/schema.sql), dados de exemplo em
-[`db/seed.sql`](./db/seed.sql).
-
-## Simulando um pagamento em desenvolvimento
-
-Sem PSP real, confirme o Pix manualmente:
+## Simulando a confirmação do Pix em desenvolvimento
 
 ```bash
-# 1. crie o pedido, adicione itens e chame /pay — anote o psp_txid
-# 2. simule o webhook do PSP:
-curl -X POST localhost:3000/webhooks/psp \
+curl -X POST http://localhost:3000/webhooks/psp \
   -H 'content-type: application/json' \
   -H 'x-webhook-secret: <PSP_WEBHOOK_SECRET do .env>' \
   -d '{"txid": "<psp_txid>", "status": "pago"}'
 ```
 
-## App Android (cliente scan & pay)
+## Próxima fase
 
-O diretório [`app/`](./app) contém o app do morador: uma SPA (HTML/JS)
-que escaneia código de barras pela câmera, monta o carrinho e paga com
-Pix copia-e-cola, embarcada em um APK Android via WebView nativo.
-
-- **APK pronto:** [`app/releases/marketme-debug.apk`](./app/releases/marketme-debug.apk)
-  (minSdk 23 / Android 6+, assinatura de debug — instale habilitando
-  "fontes desconhecidas")
-- **Primeiro uso:** abra o app → informe o endereço da API
-  (ex.: `http://192.168.0.10:3000`, o IP da máquina que roda o backend,
-  na mesma rede Wi-Fi) → toque em "Buscar lojas" → escolha a loja → salvar.
-- **Recompilar o APK** (Linux, sem Gradle/Android Studio — usa as
-  ferramentas do SDK empacotadas pelo Debian/Ubuntu):
-
-```bash
-sudo apt install android-sdk-build-tools android-sdk-platform-23 \
-                 apksigner zipalign dalvik-exchange default-jdk
-cd app && npm install && npm run build:apk
-# → app/android/build/marketme-debug.apk
-```
-
-> Nota: o app usa WebView + `file://` com acesso universal liberado e
-> tráfego HTTP em texto claro — adequado para o MVP em rede local. Antes
-> de produção: servir a API via HTTPS e restringir essas permissões.
-
-## Próximos passos (Fase 2)
-
-- Cadastro/autenticação de moradores (hoje os clientes vêm do seed)
-- Integração com um PSP real de Pix (Efí, Mercado Pago, PagBank…)
-- Multi-loja com rota de reposição do operador
-- Repasse ao condomínio (% do faturamento via Pix)
-- Cartão tokenizado + carteira/saldo
+- Servidor de API próprio substituindo o acesso direto (os campos já
+  existem no app); multi-loja de verdade (preço/estoque por unidade)
+- Integração com PSP real de Pix (confirmação automática)
+- Gravação da venda de volta no ERP (baixa de estoque/faturamento)

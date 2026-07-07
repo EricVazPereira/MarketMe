@@ -2,7 +2,6 @@ import express from 'express';
 import { catalogRouter } from './routes/catalog.js';
 import { ordersRouter } from './routes/orders.js';
 import { webhooksRouter } from './routes/webhooks.js';
-import { stockRouter } from './routes/stock.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { customersRouter } from './routes/customers.js';
 import { HttpError } from './errors.js';
@@ -18,7 +17,7 @@ export function createApp() {
     res.set('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
     res.set(
       'Access-Control-Allow-Headers',
-      'content-type,x-webhook-secret,authorization',
+      'content-type,x-webhook-secret,authorization,x-db-path',
     );
     if (req.method === 'OPTIONS') return res.sendStatus(204);
     next();
@@ -46,7 +45,6 @@ export function createApp() {
   app.use(catalogRouter);
   app.use(ordersRouter);
   app.use(webhooksRouter);
-  app.use(stockRouter);
   app.use(dashboardRouter);
   app.use(customersRouter);
 
