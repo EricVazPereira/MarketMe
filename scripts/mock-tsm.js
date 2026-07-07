@@ -132,6 +132,23 @@ app.post(`${T}/FechamentoComandaSmartPDV`, (req, res) => {
   res.json({ sucess: true, id_sucess: 0, message_sucess: 'Comanda Fechada com Sucesso !' });
 });
 
+app.post(`${T}/CancelarItem`, (req, res) => {
+  const { nr_gerador, ordem_item } = req.body ?? {};
+  const linhas = state.contas.get(nr_gerador);
+  if (!linhas) return res.status(400).json({ error: 'conta não existe' });
+  const idx = linhas.findIndex((l) => l.contador === ordem_item);
+  if (idx >= 0) linhas.splice(idx, 1);
+  res.json(linhas); // devolve os produtos ativos da conta
+});
+
+app.post(`${T}/CancelarConta`, (req, res) => {
+  const { nr_gerador, nm_estacao } = req.body ?? {};
+  if (!state.contas.has(nr_gerador))
+    return res.json({ sucess: false, message_sucess: 'Conta não encontrada' });
+  state.contas.delete(nr_gerador);
+  res.json({ sucess: true, id_sucess: 0, message_sucess: `PDV (${nm_estacao}) Conta Cancelada com Sucesso !` });
+});
+
 app.post(`${T}/VerificaPermissaoUsuario`, (req, res) => {
   const { codigo, senha } = req.body ?? {};
   if (codigo === '0' && senha === '794613')

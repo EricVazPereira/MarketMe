@@ -26,11 +26,14 @@
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
     get conta() {
-      try { return JSON.parse(localStorage.getItem('mm.conta')) || { barcode: '', linhas: [] }; }
-      catch { return { barcode: '', linhas: [] }; }
+      try {
+        const c = JSON.parse(localStorage.getItem('mm.conta')) || {};
+        return { barcode: c.barcode || '', linhas: c.linhas || [], canceladas: c.canceladas || [] };
+      } catch { return { barcode: '', linhas: [], canceladas: [] }; }
     },
     set conta(v) {
-      if (v && (v.barcode || v.linhas.length)) localStorage.setItem('mm.conta', JSON.stringify(v));
+      if (v && (v.barcode || v.linhas.length || (v.canceladas || []).length))
+        localStorage.setItem('mm.conta', JSON.stringify(v));
       else localStorage.removeItem('mm.conta');
     },
   };
@@ -146,8 +149,33 @@
       throw new Error(linhas?.error || 'retorno inesperado do GravaItens');
     // regra do PDV: a partir da 2ª inserção o ID é o barcode devolvido
     const barcode = linhas.length > 0 ? linhas[0].barcode : conta.barcode;
-    cfg.conta = { barcode, linhas };
+    cfg.conta = { barcode, linhas, canceladas: conta.canceladas };
     return linhas;
+  }
+
+  // Cancela UMA linha da comanda (a última passada do produto) via API
+  // própria do PDV; a resposta é a lista de linhas ainda ativas. A linha
+  // cancelada fica guardada para aparecer em vermelho na lista.
+  async function cancelarItem(productId) {
+    await checkPermission('CANCEL_ITEM_CX_FUN');
+    const conta = cfg.conta;
+    const doProduto = conta.linhas.filter((l) => l.id === productId);
+    if (doProduto.length === 0) return;
+    const alvo = doProduto.reduce((a, b) => (a.contador > b.contador ? a : b));
+    const resp = await tsm('POST', 'CancelarItem', {
+      nr_gerador: conta.barcode,
+      ordem_item: alvo.contador,
+    });
+    const ativas = Array.isArray(resp)
+      ? resp
+      : conta.linhas.filter((l) => l.contador !== alvo.contador);
+    const vivos = new Set(ativas.map((l) => l.contador));
+    const novasCanceladas = conta.linhas.filter((l) => !vivos.has(l.contador));
+    cfg.conta = {
+      barcode: conta.barcode,
+      linhas: ativas,
+      canceladas: [...conta.canceladas, ...novasCanceladas],
+    };
   }
 
   // ---------- produto / scan ----------
@@ -396,7 +424,16 @@
     await stopScanner();
     setTitle('Passe seus produtos');
     view.innerHTML = `
-      <div id="reader"></div>
+      <div id="reader-wrap">
+        <div id="reader"></div>
+        <div class="scan-overlay">
+          <div class="scan-frame">
+            <span class="c tl"></span><span class="c tr"></span>
+            <span class="c bl"></span><span class="c br"></span>
+            <div class="scan-line"></div>
+          </div>
+        </div>
+      </div>
       <div class="card" style="margin-top:10px">
         <div class="row">
           <input id="in-ean" class="grow" type="text" inputmode="numeric" placeholder="ou digite o código">
@@ -419,60 +456,60 @@
       scanner = new Html5Qrcode('reader');
       await scanner.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 240, height: 150 } },
+        { fps: 10 }, // lê o quadro inteiro; a mira central é o guia visual
         (text) => processCode(text),
         () => {}, // frames sem código: ignora
       );
     } catch {
-      $('#reader').outerHTML =
+      $('#reader-wrap').outerHTML =
         '<div class="card center muted">Câmera indisponível — digite o código ou use o leitor.</div>';
     }
   }
 
+  const cartRow = (g, n, cancelada) => `
+    <div class="cart-row${cancelada ? ' cancelada' : ''}">
+      <span class="muted">${cancelada ? '✕' : n}</span>
+      <span class="cart-name" title="${esc(g.name)}">${esc(g.name)}</span>
+      <span class="cart-qtd">${g.unidade === 'KG' ? `${g.qty.toFixed(3)}kg` : g.qty}</span>
+      <span class="cart-un">${money(g.unit_price)}${g.unidade === 'KG' ? '/kg' : ''}</span>
+      <span class="cart-total">${money(g.total)}</span>
+      ${cancelada ? '<span></span>' : `<button class="link" data-del="${esc(g.id)}">✕</button>`}
+    </div>`;
+
   function refreshCart() {
     const area = $('#cart-area');
     if (!area) return;
-    const { linhas } = cfg.conta;
-    if (linhas.length === 0) {
+    const { linhas, canceladas } = cfg.conta;
+    if (linhas.length === 0 && canceladas.length === 0) {
       area.innerHTML = '<p class="center muted" style="padding:16px">Nenhum item ainda — passe o primeiro produto.</p>';
       return;
     }
     const grupos = agrupar(linhas);
+    const gruposCancelados = agrupar(canceladas);
     const total = totalConta(linhas);
     area.innerHTML = `
       <div class="cart-head">
         <span>N</span><span>Descrição</span><span>Qtd</span><span>R$UN</span><span>R$ Total</span><span></span>
       </div>
-      ${grupos.map((g, i) => `
-        <div class="cart-row">
-          <span class="muted">${i + 1}</span>
-          <span class="cart-name" title="${esc(g.name)}">${esc(g.name)}</span>
-          <span class="cart-qtd">${g.unidade === 'KG' ? `${g.qty.toFixed(3)}kg` : g.qty}</span>
-          <span class="cart-un">${money(g.unit_price)}${g.unidade === 'KG' ? '/kg' : ''}</span>
-          <span class="cart-total">${money(g.total)}</span>
-          <button class="link" data-del="${esc(g.id)}">✕</button>
-        </div>`).join('')}
+      ${grupos.map((g, i) => cartRow(g, i + 1, false)).join('')}
+      ${gruposCancelados.map((g) => cartRow(g, 0, true)).join('')}
       <div class="total-bar"><span>Total</span><span>${money(total)}</span></div>
-      <button id="btn-fechar-conta" class="primary">Fechar conta — ${money(total)}</button>
+      ${linhas.length === 0 ? '' : `<button id="btn-fechar-conta" class="primary">Fechar conta — ${money(total)}</button>`}
       <button id="btn-cancelar-conta" class="danger">Cancelar conta</button>`;
 
-    // cancelar item: valida CANCEL_ITEM_CX_FUN no servidor e estorna
+    // cancelar item: permissão silenciosa + API CancelarItem (uma
+    // unidade por toque — a última passada do produto)
     area.querySelectorAll('[data-del]').forEach((btn) => {
       btn.onclick = async () => {
         try {
-          await checkPermission('CANCEL_ITEM_CX_FUN');
-          const g = grupos.find((x) => x.id === btn.dataset.del);
-          await gravaItens([{
-            Cod_pro: g.id, Obs_pro: 'CANCELAMENTO',
-            Qtde_pro: `-${g.qty}`, Vl_Pro: g.unit_price.toFixed(2), Acomp_Pro: '',
-          }]);
+          await cancelarItem(btn.dataset.del);
           toast('Item cancelado');
           refreshCart();
         } catch (e) { toast(`⚠️ ${e.message}`); }
       };
     });
 
-    // cancelar a conta: confirmação na tela + CANCEL_CONTA_CX_FUN
+    // cancelar a conta: confirmação + permissão + API CancelarConta
     $('#btn-cancelar-conta').onclick = () => {
       const overlay = openModal(`
         <h3>Cancelar conta?</h3>
@@ -482,8 +519,16 @@
       overlay.querySelector('#modal-confirm').onclick = async () => {
         try {
           await checkPermission('CANCEL_CONTA_CX_FUN');
+          if (cfg.conta.barcode) {
+            await tsm('POST', 'CancelarConta', {
+              nr_gerador: cfg.conta.barcode,
+              nm_estacao: cfg.estacao,
+              valor_conta: '0',
+              valor_acrescimo: '0',
+            });
+          }
           closeModal(overlay);
-          cfg.conta = { barcode: '', linhas: [] };
+          cfg.conta = { barcode: '', linhas: [], canceladas: [] };
           toast('Conta cancelada');
           renderStart();
         } catch (e) { toast(`⚠️ ${e.message}`); }
@@ -523,7 +568,7 @@
         });
         if (r && r.sucess === false)
           return toast(r.message_sucess || 'não foi possível fechar a conta');
-        cfg.conta = { barcode: '', linhas: [] };
+        cfg.conta = { barcode: '', linhas: [], canceladas: [] };
         renderSuccess(total, r?.message_sucess);
       } catch (e) { toast(`⚠️ ${e.message}`); }
     };
