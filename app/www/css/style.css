@@ -26,7 +26,10 @@ body {
   align-items: center;
   gap: 8px;
 }
-#topbar h1 { font-size: 1.15rem; flex: 1; text-align: center; font-weight: 600; }
+#topbar h1 {
+  font-size: 1.15rem; flex: 1; text-align: center; font-weight: 600;
+  user-select: none; -webkit-user-select: none; touch-action: none;
+}
 .icon-btn {
   background: none; border: none; color: #fff;
   font-size: 1.4rem; width: 40px; height: 40px;

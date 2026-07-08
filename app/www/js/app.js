@@ -273,19 +273,71 @@
   }
 
   // ---------- permissão (cancelamentos) ----------
-  // Valida no servidor com as credenciais fixas do caixa (0/794613),
-  // sem pedir nada na tela. Lança erro com a Mensagem quando negado.
-  async function checkPermission(funcao) {
-    const r = await tsm('POST', PERMISSAO_METODO, {
-      funcao,
-      codigo: OPERADOR.codigo,
-      senha: OPERADOR.senha,
-    });
+  // Valida uma permissão no servidor. Por padrão usa as credenciais
+  // fixas do caixa (0/794613); código/senha podem ser informados (ex.:
+  // o acesso ao menu da engrenagem). Lança erro com a Mensagem quando negado.
+  async function checkPermission(funcao, codigo = OPERADOR.codigo, senha = OPERADOR.senha) {
+    const r = await tsm('POST', PERMISSAO_METODO, { funcao, codigo, senha });
     const ok =
       String(r?.Resultado ?? r?.resultado).toLowerCase() === 'true' ||
       r?.Resultado === true || r?.resultado === true;
     if (!ok)
       throw new Error(r?.Mensagem || 'Usuário sem permissão para esta operação.');
+  }
+
+  // Engrenagem: pede código+senha (numéricos), valida na API
+  // (CANCEL_CONTA_CX_FUN) e abre APENAS as Configurações. Se a API
+  // estiver inacessível (ex.: endereço errado), libera as Configurações
+  // mesmo assim, para não travar o operador fora do ajuste de conexão.
+  function openGearMenu() {
+    if (!cfg.apiUrl) return renderSettings(); // 1ª configuração: sem o que validar
+    const overlay = openModal(`
+      <h3>Configurações</h3>
+      <p class="muted">Informe código e senha do operador.</p>
+      <label>Código</label>
+      <input id="gear-cod" type="text" inputmode="numeric" pattern="[0-9]*">
+      <label>Senha</label>
+      <input id="gear-senha" type="password" inputmode="numeric" pattern="[0-9]*">
+      <button id="modal-confirm" class="primary" style="margin-top:14px">Entrar</button>
+      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
+    const soNumeros = (el) => el.addEventListener('input', () => {
+      el.value = el.value.replace(/\D/g, '');
+    });
+    soNumeros(overlay.querySelector('#gear-cod'));
+    soNumeros(overlay.querySelector('#gear-senha'));
+    overlay.querySelector('#modal-confirm').onclick = async () => {
+      const codigo = overlay.querySelector('#gear-cod').value.trim();
+      const senha = overlay.querySelector('#gear-senha').value.trim();
+      try {
+        await checkPermission('CANCEL_CONTA_CX_FUN', codigo, senha);
+        closeModal(overlay);
+        renderSettings();
+      } catch (e) {
+        if (/sem conex/i.test(e.message)) {
+          closeModal(overlay);
+          toast('Sem conexão — abrindo Configurações para ajustar o endereço.');
+          renderSettings();
+        } else {
+          toast(e.message);
+        }
+      }
+    };
+    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
+  }
+
+  // Segurar 2s em cima do nome da loja (título) revela estas operações
+  function showCaixaMenu() {
+    const overlay = openModal(`
+      <h3>Operações do caixa</h3>
+      <button id="op-fechar" class="secondary" style="margin-top:12px">Fechar caixa</button>
+      <button id="op-sair" class="secondary" style="margin-top:8px">Sair do app</button>
+      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
+    overlay.querySelector('#op-fechar').onclick = () => { closeModal(overlay); renderFecharCaixa(); };
+    overlay.querySelector('#op-sair').onclick = () => {
+      if (window.MMNative && window.MMNative.exitApp) window.MMNative.exitApp();
+      else window.close();
+    };
+    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
   }
 
   // ---------- telas ----------
@@ -386,8 +438,8 @@
     };
   }
 
-  // Tela inicial (antes da operação) com botões escondidos no canto
-  // superior direito: segurar o dedo ~1s revela "Fechar caixa" e "Sair"
+  // Tela inicial (antes da operação). Fechar caixa e Sair ficam no menu
+  // protegido da engrenagem (topo direito), não mais num botão escondido.
   function renderStart() {
     screen = 'start';
     pararInatividade(); showBack(null);
@@ -398,40 +450,8 @@
         <div class="big-emoji" style="font-size:4.5rem">🛒</div>
         <h2>Toque para iniciar</h2>
         <p class="muted" style="margin-top:8px">Passe seus produtos e pague sem filas</p>
-      </div>
-      <div id="corner-hot"></div>`;
-
+      </div>`;
     $('#start-screen').onclick = () => renderShop();
-
-    // botões escondidos: pressionar e segurar o canto superior direito
-    const hot = $('#corner-hot');
-    let holdTimer = null;
-    const startHold = (ev) => {
-      ev.preventDefault();
-      holdTimer = setTimeout(showHiddenMenu, 900);
-    };
-    const cancelHold = () => clearTimeout(holdTimer);
-    hot.addEventListener('pointerdown', startHold);
-    hot.addEventListener('pointerup', cancelHold);
-    hot.addEventListener('pointerleave', cancelHold);
-  }
-
-  function showHiddenMenu() {
-    const overlay = openModal(`
-      <h3>Operações do caixa</h3>
-      <button id="menu-fechar" class="secondary" style="margin-top:12px">Fechar caixa</button>
-      <button id="menu-sair" class="secondary" style="margin-top:8px">Sair</button>
-      <button id="modal-back" class="link" style="width:100%;margin-top:8px">Voltar</button>`);
-    overlay.querySelector('#menu-fechar').onclick = () => {
-      closeModal(overlay);
-      renderFecharCaixa();
-    };
-    overlay.querySelector('#menu-sair').onclick = () => {
-      // sai do aplicativo (ponte nativa do APK; fallback fecha a página)
-      if (window.MMNative && window.MMNative.exitApp) window.MMNative.exitApp();
-      else window.close();
-    };
-    overlay.querySelector('#modal-back').onclick = () => closeModal(overlay);
   }
 
   function renderFecharCaixa() {
@@ -665,7 +685,23 @@
   document.addEventListener('keydown', resetarInatividade, true);
 
   // ---------- navegação ----------
-  $('#btn-settings').onclick = () => renderSettings();
+  // engrenagem → Configurações (protegida por código+senha)
+  $('#btn-settings').onclick = () => openGearMenu();
+
+  // segurar 2s em cima do nome da loja (título) → Fechar caixa / Sair do app
+  (() => {
+    const title = $('#title');
+    let holdTimer = null;
+    const start = () => {
+      if (screen !== 'start') return; // só na tela inicial (nome da loja)
+      holdTimer = setTimeout(showCaixaMenu, 2000);
+    };
+    const cancel = () => clearTimeout(holdTimer);
+    title.addEventListener('pointerdown', start);
+    title.addEventListener('pointerup', cancel);
+    title.addEventListener('pointerleave', cancel);
+    title.addEventListener('pointercancel', cancel);
+  })();
   window.MM = {
     settings: () => renderSettings(),
     retry: () => renderCaixaCheck(),
