@@ -32,6 +32,9 @@
     // caminho/compartilhamento da impressora (ex.: \\eric\cupom)
     get impressora() { return localStorage.getItem('mm.impressora') || ''; },
     set impressora(v) { localStorage.setItem('mm.impressora', v); },
+    // logo da loja (data URL), impressa no topo do cupom
+    get logo() { return localStorage.getItem('mm.logo') || ''; },
+    set logo(v) { v ? localStorage.setItem('mm.logo', v) : localStorage.removeItem('mm.logo'); },
     // endereço do servidor de impressão (roda no PC com a impressora);
     // vazio = impressão desativada
     get printServer() { return localStorage.getItem('mm.printServer') || ''; },
@@ -52,7 +55,6 @@
   };
 
   let screen = 'boot';
-  let scanner = null;
   let lastScan = { code: '', at: 0 };
 
   const $ = (sel) => document.querySelector(sel);
@@ -156,14 +158,6 @@
     return overlay;
   }
   const closeModal = (o) => o.remove();
-
-  async function stopScanner() {
-    if (scanner) {
-      try { await scanner.stop(); } catch { /* já parado */ }
-      try { scanner.clear(); } catch { /* sem elemento */ }
-      scanner = null;
-    }
-  }
 
   // ---------- conta (carrinho espelhando a comanda do PDV) ----------
   // As linhas vêm do retorno do GravaItens (uma por unidade/pesagem);
@@ -357,7 +351,6 @@
   async function renderSettings() {
     screen = 'settings';
     pararInatividade(); showBack(null);
-    await stopScanner();
     setTitle('Configurações');
     view.innerHTML = `
       <div class="card">
@@ -378,6 +371,13 @@
         <label>Servidor de impressão (PC com a impressora; vazio = não imprime)</label>
         <input id="in-print-server" type="url" autocapitalize="off"
                placeholder="http://192.168.0.18:8127" value="${esc(cfg.printServer)}">
+        <label>Logo da loja (impressa no topo do cupom)</label>
+        <div class="row" style="margin-top:4px;gap:10px">
+          <img id="logo-preview" src="${esc(cfg.logo)}" class="${cfg.logo ? '' : 'hidden'}"
+               style="width:44px;height:44px;object-fit:contain;border:1px solid #d4dcd7;border-radius:8px;background:#fff">
+          <input id="in-logo" type="file" accept="image/*" class="grow">
+        </div>
+        <button id="btn-logo-remove" class="link ${cfg.logo ? '' : 'hidden'}" style="width:100%">Remover logo</button>
         <label>Balança integrada (etiqueta com peso no código de barras)</label>
         <select id="in-scale">
           <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
@@ -397,6 +397,28 @@
       cfg.impressora = $('#in-impressora').value.trim();
       cfg.printServer = $('#in-print-server').value.trim();
       cfg.scale = $('#in-scale').value === '1';
+    };
+    $('#in-logo').onchange = () => {
+      const file = $('#in-logo').files[0];
+      if (!file) return;
+      if (file.size > 512 * 1024) return toast('Imagem muito grande (máx. 512KB)');
+      const reader = new FileReader();
+      reader.onload = () => {
+        cfg.logo = reader.result;
+        $('#logo-preview').src = reader.result;
+        $('#logo-preview').classList.remove('hidden');
+        $('#btn-logo-remove').classList.remove('hidden');
+        toast('Logo salva');
+      };
+      reader.onerror = () => toast('Não foi possível ler a imagem');
+      reader.readAsDataURL(file);
+    };
+    $('#btn-logo-remove').onclick = () => {
+      cfg.logo = '';
+      $('#in-logo').value = '';
+      $('#logo-preview').classList.add('hidden');
+      $('#btn-logo-remove').classList.add('hidden');
+      toast('Logo removida');
     };
     $('#btn-test').onclick = async () => {
       saveFields();
@@ -420,7 +442,6 @@
   async function renderCaixaCheck() {
     screen = 'caixa-check';
     pararInatividade(); showBack(null);
-    await stopScanner();
     setTitle(cfg.empresa || 'MarketMe');
     view.innerHTML = '<p class="center" style="padding:40px"><span class="spinner"></span><br><br>Verificando caixa…</p>';
     try {
@@ -465,7 +486,6 @@
   function renderStart() {
     screen = 'start';
     pararInatividade(); showBack(null);
-    stopScanner();
     setTitle(cfg.empresa || 'MarketMe');
     view.innerHTML = `
       <div id="start-screen" class="start-screen">
@@ -504,22 +524,12 @@
   // Tela de operação: câmera + código manual + conta em andamento
   async function renderShop() {
     screen = 'shop';
-    await stopScanner();
     setTitle('Passe seus produtos');
     view.innerHTML = `
-      <div id="reader-wrap">
-        <div id="reader"></div>
-        <div class="scan-overlay">
-          <div class="scan-frame">
-            <span class="c tl"></span><span class="c tr"></span>
-            <span class="c bl"></span><span class="c br"></span>
-            <div class="scan-line"></div>
-          </div>
-        </div>
-      </div>
-      <div class="card" style="margin-top:10px">
-        <div class="row">
-          <input id="in-ean" class="grow" type="text" inputmode="numeric" placeholder="ou digite o código">
+      <div class="card">
+        <label>Código do produto (leitor ou digitado)</label>
+        <div class="row" style="margin-top:4px">
+          <input id="in-ean" class="grow" type="text" inputmode="numeric" placeholder="bipe ou digite o código" autofocus>
           <button id="btn-add-ean" class="primary" style="width:110px">Adicionar</button>
         </div>
       </div>
@@ -532,22 +542,10 @@
     $('#in-ean').addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') { ev.preventDefault(); $('#btn-add-ean').click(); }
     });
+    $('#in-ean').focus();
 
     refreshCart();
     armarInatividade(); // conta 1 min de inatividade nesta tela
-
-    try {
-      scanner = new Html5Qrcode('reader');
-      await scanner.start(
-        { facingMode: 'environment' },
-        { fps: 10 }, // lê o quadro inteiro; a mira central é o guia visual
-        (text) => processCode(text),
-        () => {}, // frames sem código: ignora
-      );
-    } catch {
-      $('#reader-wrap').outerHTML =
-        '<div class="card center muted">Câmera indisponível — digite o código ou use o leitor.</div>';
-    }
   }
 
   const cartRow = (g, n, cancelada) => `
@@ -642,6 +640,7 @@
         body: JSON.stringify({
           printerPath: cfg.impressora,
           empresa: cfg.empresaDados,
+          logoBase64: cfg.logo || undefined,
           itens: linhas,
           formaPagamento: FORMA_PAGAMENTO,
           total,
@@ -658,7 +657,6 @@
   async function renderPayment() {
     screen = 'payment';
     pararInatividade(); showBack(null);
-    await stopScanner();
     setTitle('Fechar conta');
     const { linhas, barcode } = cfg.conta;
     const total = totalConta(linhas);

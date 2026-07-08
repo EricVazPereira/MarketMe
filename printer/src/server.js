@@ -27,14 +27,14 @@ app.use((req, res, next) => {
 app.get('/health', (_req, res) => res.json({ ok: true, dryRun: DRY_RUN }));
 
 app.post('/imprimir', async (req, res) => {
-  const { printerPath, empresa, itens, formaPagamento, total, cpf } = req.body ?? {};
+  const { printerPath, empresa, itens, formaPagamento, total, cpf, logoBase64 } = req.body ?? {};
   if (!printerPath) return res.status(400).json({ error: 'printerPath é obrigatório' });
   if (!Array.isArray(itens) || itens.length === 0)
     return res.status(400).json({ error: 'itens deve ser uma lista não vazia' });
 
   let buffer;
   try {
-    buffer = buildCupom({ empresa, itens, formaPagamento, total, cpf, dataHora: new Date() });
+    buffer = await buildCupom({ empresa, itens, formaPagamento, total, cpf, logoBase64, dataHora: new Date() });
   } catch (err) {
     return res.status(500).json({ error: `falha ao montar o cupom: ${err.message}` });
   }

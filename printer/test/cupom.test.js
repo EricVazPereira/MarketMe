@@ -46,8 +46,8 @@ const ITENS = [
   { id: '00000000000002', name: 'REFRIGERANTE LATA', amount: '2', unit_price: 4.5, total_price: 9.0, unidade: 'UN' },
 ];
 
-test('buildCupom monta um Buffer com os comandos ESC/POS essenciais', () => {
-  const buf = buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'Cartao de Credito', total: 17.98, cpf: '12345678900' });
+test('buildCupom monta um Buffer com os comandos ESC/POS essenciais', async () => {
+  const buf = await buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'Cartao de Credito', total: 17.98, cpf: '12345678900' });
   assert.ok(Buffer.isBuffer(buf));
   assert.ok(buf.includes(Buffer.from([0x1b, 0x40]))); // INIT
   assert.ok(buf.includes(Buffer.from([0x1b, 0x4d, 0x01]))); // FONT_B
@@ -81,14 +81,28 @@ test('itemLine() e headerLine() têm exatamente 64 colunas', () => {
   );
 });
 
-test('formata quantidade em kg com 3 casas e unidade em UN sem decimais', () => {
-  const buf = buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98 });
+test('formata quantidade em kg com 3 casas e unidade em UN sem decimais', async () => {
+  const buf = await buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98 });
   const texto = buf.toString('latin1');
   assert.ok(texto.includes('1,500KG'));
   assert.ok(texto.includes('2UN'));
 });
 
-test('CPF ausente não aparece no cupom', () => {
-  const buf = buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98 });
+test('CPF ausente não aparece no cupom', async () => {
+  const buf = await buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98 });
   assert.ok(!buf.toString('latin1').includes('CPF:'));
+});
+
+test('logo ausente não altera o cupom (comportamento atual, sem regressão)', async () => {
+  const buf = await buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98 });
+  assert.ok(!buf.includes(Buffer.from([0x1d, 0x76, 0x30]))); // sem comando GS v 0
+});
+
+test('logo inválida não derruba o cupom — imprime sem ela', async () => {
+  const buf = await buildCupom({
+    empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
+    logoBase64: 'isso-nao-e-uma-imagem-valida',
+  });
+  assert.ok(Buffer.isBuffer(buf));
+  assert.ok(buf.toString('latin1').includes('NEWPOINTER'));
 });

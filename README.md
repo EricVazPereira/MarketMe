@@ -44,8 +44,10 @@ no app, a impressão simplesmente não acontece (recurso opcional).
    **só as Configurações**. Segurar 2s em cima do **nome da loja**
    (tela inicial) revela **Fechar caixa** (`FechamentoCX` → volta à
    abertura) e **Sair do app**.
-4. **Passar produtos**: câmera (com mira central), digitação ou leitor
-   físico (modo teclado, funciona em qualquer tela). Cada código é
+4. **Passar produtos**: digitação ou leitor físico de código de barras
+   (modo teclado — o leitor "digita" o código e um Enter; funciona no
+   campo da tela de operação). Sem câmera/scanner por software: a loja
+   usa um leitor físico dedicado. Cada código é
    consultado em `ConsultaFormatoProduto/{cod}` — se `un_pro = KG` o
    app pede o peso (ou lê da etiqueta de balança) — e gravado via
    **`GravaItens`** com o preço do cadastro. O `barcode` devolvido na
@@ -96,15 +98,24 @@ muda a porta). No app, em Configurações, preencha:
 
 - **Impressora**: o caminho/nome usado pelo Windows (`\\eric\cupom`);
 - **Servidor de impressão**: endereço deste serviço na rede
-  (`http://IP-DO-PC:8127`) — **deixe vazio para não imprimir**.
+  (`http://IP-DO-PC:8127`) — **deixe vazio para não imprimir**;
+- **Logo da loja**: escolha uma imagem (até 512KB) — é convertida em
+  bitmap e impressa centralizada no topo do cupom, acima do nome/
+  endereço da empresa. Fica salva no tablet; "Remover logo" tira do
+  cupom sem precisar reconfigurar o resto.
 
 ### Como funciona
 
 1. Depois que `FechamentoComandaSmartPDV` confirma o fechamento, o app
    chama `POST /imprimir` no servidor de impressão com os itens da
    comanda, os dados da empresa (guardados de `PegaDadosEmpresa` ao
-   testar a conexão), forma de pagamento, total e CPF.
-2. `printer/src/cupom.js` monta o buffer ESC/POS (`buildCupom`).
+   testar a conexão), a logo (se configurada), forma de pagamento,
+   total e CPF.
+2. `printer/src/cupom.js` monta o buffer ESC/POS (`buildCupom`); se
+   houver logo, `printer/src/image.js` (via `Jimp`, puro JS) redimensiona
+   e binariza a imagem e a empacota no comando de bitmap `GS v 0` antes
+   do cabeçalho de texto. Logo inválida/corrompida não derruba o cupom
+   — ele sai sem a imagem.
 3. `printer/src/winspool.js` manda os bytes pro spooler
    (`OpenPrinterW`/`WritePrinter` via `koffi`, biblioteca FFI —
    mesmo mecanismo do Caixa Livre).
@@ -157,10 +168,13 @@ dentro de `app/`.
 
 ## Leitor de código de barras no tablet
 
-1. **Câmera do tablet** (já funciona) — zero custo; exige boa luz.
-2. **Leitor Bluetooth "modo HID/teclado"** (~R$ 150-400) — pareia como
+O app não usa mais a câmera para escanear — passa a depender de um
+**leitor físico** (mais rápido e confiável que a câmera num PDV):
+
+1. **Leitor Bluetooth "modo HID/teclado"** (~R$ 150-400) — pareia como
    teclado; o app captura a leitura na tela de produtos e também na
    tela "Toque para iniciar" (já abre a compra com o primeiro bip).
-3. **Leitor USB com adaptador OTG** — idem, via cabo.
+2. **Leitor USB com adaptador OTG** — idem, via cabo.
 
-Nada precisa ser reconfigurado no app para as opções 2 e 3.
+Também dá pra digitar o código manualmente no campo da tela de
+operação, útil para produtos com código de barras ilegível.

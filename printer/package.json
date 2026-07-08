@@ -10,7 +10,8 @@
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
-    "express": "^4.22.2"
+    "express": "^4.22.2",
+    "jimp": "^1.6.1"
   },
   "optionalDependencies": {
     "koffi": "^2.16.2"

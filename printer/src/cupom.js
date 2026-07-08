@@ -8,6 +8,7 @@
 // sem uma emissão fiscal real por trás seria enganoso. A função
 // qrEscPos já está pronta em escpos.js para quando essa fase chegar.
 import { CMD, COLS, t, padRight, padLeft, center, moneyBR } from './escpos.js';
+import { imageToGSv0 } from './image.js';
 
 // larguras fixas da tabela de itens (soma = 64)
 const W = { n: 3, sep: 1, codigo: 7, descricao: 29, qt: 8, vlUn: 8, total: 8 };
@@ -63,13 +64,28 @@ function formatQtd(qty, unidade) {
  * @param {string} p.formaPagamento - ex.: "PIX", "Cartao de Credito"
  * @param {number} p.total
  * @param {string} [p.cpf]
+ * @param {string|Buffer} [p.logoBase64] - logo da loja (data URL ou base64 puro)
  * @param {Date}   [p.dataHora]
  */
-export function buildCupom({ empresa, itens, formaPagamento, total, cpf, dataHora = new Date() }) {
+export async function buildCupom({ empresa, itens, formaPagamento, total, cpf, logoBase64, dataHora = new Date() }) {
   const chunks = [CMD.INIT, CMD.FONT_B, CMD.LINE_SPACING_TIGHT];
 
+  chunks.push(CMD.ALIGN_CENTER);
+
+  // logo (opcional): alinhamento centralizado também vale pra imagem
+  // raster na maioria das impressoras ESC/POS. Falha ao converter não
+  // derruba o cupom inteiro — só imprime sem a logo.
+  if (logoBase64) {
+    try {
+      chunks.push(await imageToGSv0(logoBase64));
+      chunks.push(t(''));
+    } catch (err) {
+      console.error('Falha ao converter a logo, imprimindo sem ela:', err.message);
+    }
+  }
+
   // cabeçalho da empresa
-  chunks.push(CMD.ALIGN_CENTER, CMD.BOLD_ON);
+  chunks.push(CMD.BOLD_ON);
   chunks.push(t(empresa?.['Nome Fantasia'] || empresa?.['Razao Social'] || ''));
   chunks.push(CMD.BOLD_OFF);
   const endereco = [empresa?.Rua, empresa?.Numero].filter(Boolean).join(' ');

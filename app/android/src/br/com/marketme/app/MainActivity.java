@@ -1,12 +1,12 @@
 package br.com.marketme.app;
 
-import android.Manifest;
 import android.app.Activity;
-import android.content.pm.PackageManager;
+import android.content.Intent;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JavascriptInterface;
-import android.webkit.PermissionRequest;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -19,9 +19,9 @@ import android.webkit.WebViewClient;
  */
 public class MainActivity extends Activity {
 
-    private static final int REQ_CAMERA = 1;
+    private static final int REQ_FILE_CHOOSER = 2;
     private WebView webView;
-    private PermissionRequest pendingWebPermission;
+    private ValueCallback<Uri[]> pendingFileCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,40 +68,40 @@ public class MainActivity extends Activity {
         });
 
         webView.setWebChromeClient(new WebChromeClient() {
+            // Sem isto, <input type="file"> (usado para escolher a logo
+            // nas Configurações) não abre nada no WebView do Android.
             @Override
-            public void onPermissionRequest(final PermissionRequest request) {
-                runOnUiThread(new Runnable() {
-                    @Override
-                    public void run() {
-                        if (hasCameraPermission()) {
-                            request.grant(request.getResources());
-                        } else {
-                            pendingWebPermission = request;
-                            requestPermissions(
-                                new String[] { Manifest.permission.CAMERA }, REQ_CAMERA);
-                        }
-                    }
-                });
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback,
+                                              FileChooserParams params) {
+                pendingFileCallback = callback;
+                Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                intent.addCategory(Intent.CATEGORY_OPENABLE);
+                intent.setType("image/*");
+                try {
+                    startActivityForResult(Intent.createChooser(intent, "Escolher logo"), REQ_FILE_CHOOSER);
+                } catch (Exception e) {
+                    pendingFileCallback = null;
+                    return false;
+                }
+                return true;
             }
         });
 
         webView.loadUrl("file:///android_asset/www/index.html");
     }
 
-    private boolean hasCameraPermission() {
-        return checkSelfPermission(Manifest.permission.CAMERA)
-            == PackageManager.PERMISSION_GRANTED;
-    }
-
     @Override
-    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
-        if (code == REQ_CAMERA && pendingWebPermission != null) {
-            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) {
-                pendingWebPermission.grant(pendingWebPermission.getResources());
-            } else {
-                pendingWebPermission.deny();
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQ_FILE_CHOOSER) {
+            if (pendingFileCallback == null) return;
+            Uri[] result = null;
+            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
+                result = new Uri[] { data.getData() };
             }
-            pendingWebPermission = null;
+            pendingFileCallback.onReceiveValue(result);
+            pendingFileCallback = null;
+        } else {
+            super.onActivityResult(requestCode, resultCode, data);
         }
     }
 
