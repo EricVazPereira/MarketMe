@@ -35,10 +35,6 @@
     // logo da loja (data URL), impressa no topo do cupom
     get logo() { return localStorage.getItem('mm.logo') || ''; },
     set logo(v) { v ? localStorage.setItem('mm.logo', v) : localStorage.removeItem('mm.logo'); },
-    // endereço do servidor de impressão (roda no PC com a impressora);
-    // vazio = impressão desativada
-    get printServer() { return localStorage.getItem('mm.printServer') || ''; },
-    set printServer(v) { localStorage.setItem('mm.printServer', v.replace(/\/+$/, '')); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
     get conta() {
@@ -65,6 +61,18 @@
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // preços do ERP vêm como "1,00" (vírgula decimal)
   const parseBR = (v) => Number(String(v ?? '0').replace(/\./g, '').replace(',', '.'));
+
+  // endereço do servidor de impressão (roda no PC com a impressora):
+  // mesma máquina/host da API, porta fixa 8127 — sem campo próprio nas
+  // configurações, só o caminho da impressora (\\eric\cupom) precisa ser
+  // preenchido.
+  const PRINT_PORT = 8127;
+  function printServerUrl() {
+    try {
+      const u = new URL(cfg.apiUrl);
+      return `${u.protocol}//${u.hostname}:${PRINT_PORT}`;
+    } catch { return ''; }
+  }
 
   // ---------- API DataSnap ----------
   async function tsm(method, path, body) {
@@ -365,12 +373,9 @@
         <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
         <label>Nome da estação (nm_estacao)</label>
         <input id="in-estacao" type="text" autocapitalize="characters" value="${esc(cfg.estacao)}">
-        <label>Impressora (caminho do compartilhamento)</label>
+        <label>Impressora (caminho do compartilhamento; vazio = não imprime)</label>
         <input id="in-impressora" type="text" autocapitalize="off"
                placeholder="\\\\eric\\cupom" value="${esc(cfg.impressora)}">
-        <label>Servidor de impressão (PC com a impressora; vazio = não imprime)</label>
-        <input id="in-print-server" type="url" autocapitalize="off"
-               placeholder="http://192.168.0.18:8127" value="${esc(cfg.printServer)}">
         <label>Logo da loja (impressa no topo do cupom)</label>
         <div class="row" style="margin-top:4px;gap:10px">
           <img id="logo-preview" src="${esc(cfg.logo)}" class="${cfg.logo ? '' : 'hidden'}"
@@ -395,7 +400,6 @@
       cfg.apiPass = $('#in-api-pass').value;
       cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
       cfg.impressora = $('#in-impressora').value.trim();
-      cfg.printServer = $('#in-print-server').value.trim();
       cfg.scale = $('#in-scale').value === '1';
     };
     $('#in-logo').onchange = () => {
@@ -527,7 +531,8 @@
     setTitle('Passe seus produtos');
     view.innerHTML = `
       <div class="card">
-        <label>Código do produto (leitor ou digitado)</label>
+        <div class="shop-headline">Passe o produto no leitor</div>
+        <label>Código do produto</label>
         <div class="row" style="margin-top:4px">
           <input id="in-ean" class="grow" type="text" inputmode="numeric" placeholder="bipe ou digite o código" autofocus>
           <button id="btn-add-ean" class="primary" style="width:110px">Adicionar</button>
@@ -628,13 +633,15 @@
 
   const FORMA_PAGAMENTO = 'PIX'; // usada no fechamento e no cupom impresso
 
-  // Pede ao servidor de impressão (roda no PC com a impressora) para
-  // imprimir o cupom. Opcional: sem cfg.printServer configurado, não faz
+  // Pede ao servidor de impressão (mesmo host da API, porta 8127) para
+  // imprimir o cupom. Opcional: sem cfg.impressora configurado, não faz
   // nada. Falha na impressão nunca desfaz a venda — só avisa o operador.
   async function imprimirCupom({ linhas, total, cpf }) {
-    if (!cfg.printServer) return;
+    if (!cfg.impressora) return;
+    const base = printServerUrl();
+    if (!base) return toast('⚠️ Cupom não impresso: configure o endereço da API');
     try {
-      const res = await fetch(`${cfg.printServer}/imprimir`, {
+      const res = await fetch(`${base}/imprimir`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

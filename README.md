@@ -93,16 +93,25 @@ PRINT_DRY_RUN=1 npm start    # desenvolvimento: grava .prn em printer/dry-run/
                               # em vez de imprimir (funciona em qualquer SO)
 ```
 
-Escuta em `http://localhost:8127` por padrão (`PRINT_PORT` no ambiente
-muda a porta). No app, em Configurações, preencha:
+Escuta na porta **8127** (fixa — `PRINT_PORT` no ambiente muda, mas o
+app sempre assume 8127). O app **não tem campo separado para o
+endereço do servidor de impressão**: ele deduz automaticamente o
+mesmo host configurado em "Endereço da API", na porta 8127 — ou seja,
+o serviço `printer/` precisa rodar **na mesma máquina** (mesmo IP) do
+Server ZF. No app, em Configurações, preencha:
 
-- **Impressora**: o caminho/nome usado pelo Windows (`\\eric\cupom`);
-- **Servidor de impressão**: endereço deste serviço na rede
-  (`http://IP-DO-PC:8127`) — **deixe vazio para não imprimir**;
+- **Impressora**: o caminho/nome usado pelo Windows (`\\eric\cupom`)
+  — **deixe vazio para não imprimir**;
 - **Logo da loja**: escolha uma imagem (até 512KB) — é convertida em
   bitmap e impressa centralizada no topo do cupom, acima do nome/
   endereço da empresa. Fica salva no tablet; "Remover logo" tira do
   cupom sem precisar reconfigurar o resto.
+
+Se o cupom fechar mas não sair na impressora, o app mostra um aviso
+("⚠️ Cupom não impresso: …") — normalmente porque o serviço
+`printer/` não está rodando naquele PC/porta, ou o Windows não
+reconhece o caminho preenchido em Impressora. A venda **não é
+desfeita** nesse caso.
 
 ### Como funciona
 
