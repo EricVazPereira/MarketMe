@@ -23,6 +23,9 @@
     set apiPass(v) { localStorage.setItem('mm.apiPass', v); },
     get empresa() { return localStorage.getItem('mm.empresa') || ''; },
     set empresa(v) { localStorage.setItem('mm.empresa', v); },
+    // caminho/compartilhamento da impressora (ex.: \\eric\cupom)
+    get impressora() { return localStorage.getItem('mm.impressora') || ''; },
+    set impressora(v) { localStorage.setItem('mm.impressora', v); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
     get conta() {
@@ -359,6 +362,9 @@
         <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
         <label>Nome da estação (nm_estacao)</label>
         <input id="in-estacao" type="text" autocapitalize="characters" value="${esc(cfg.estacao)}">
+        <label>Impressora (caminho do compartilhamento)</label>
+        <input id="in-impressora" type="text" autocapitalize="off"
+               placeholder="\\\\eric\\cupom" value="${esc(cfg.impressora)}">
         <label>Balança integrada (etiqueta com peso no código de barras)</label>
         <select id="in-scale">
           <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
@@ -375,6 +381,7 @@
       cfg.apiUser = $('#in-api-user').value.trim();
       cfg.apiPass = $('#in-api-pass').value;
       cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
+      cfg.impressora = $('#in-impressora').value.trim();
       cfg.scale = $('#in-scale').value === '1';
     };
     $('#btn-test').onclick = async () => {
