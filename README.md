@@ -93,15 +93,18 @@ PRINT_DRY_RUN=1 npm start    # desenvolvimento: grava .prn em printer/dry-run/
                               # em vez de imprimir (funciona em qualquer SO)
 ```
 
-Escuta na porta **8127** (fixa — `PRINT_PORT` no ambiente muda, mas o
-app sempre assume 8127). O app **não tem campo separado para o
-endereço do servidor de impressão**: ele deduz automaticamente o
-mesmo host configurado em "Endereço da API", na porta 8127 — ou seja,
-o serviço `printer/` precisa rodar **na mesma máquina** (mesmo IP) do
-Server ZF. No app, em Configurações, preencha:
+Escuta na porta **8127** por padrão (`PRINT_PORT` no ambiente muda). No
+app, em Configurações, preencha:
 
 - **Impressora**: o caminho/nome usado pelo Windows (`\\eric\cupom`)
   — **deixe vazio para não imprimir**;
+- **Servidor de impressão** (opcional): endereço de rede de onde
+  `printer/` está rodando. Se a impressora estiver na **mesma máquina**
+  do Server ZF, deixe em branco — o app usa o mesmo host da API, porta
+  8127. Preencha só se `printer/` rodar em **outra máquina** (ex.:
+  impressora de rede, PC dedicado à impressão) — nesse caso, o
+  compartilhamento em "Impressora" também precisa ser algo que essa
+  outra máquina enxergue, não o Server ZF;
 - **Logo da loja**: escolha uma imagem (até 512KB) — é convertida em
   bitmap e impressa centralizada no topo do cupom, acima do nome/
   endereço da empresa. Fica salva no tablet; "Remover logo" tira do

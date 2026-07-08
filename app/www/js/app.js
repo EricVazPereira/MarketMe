@@ -35,6 +35,12 @@
     // logo da loja (data URL), impressa no topo do cupom
     get logo() { return localStorage.getItem('mm.logo') || ''; },
     set logo(v) { v ? localStorage.setItem('mm.logo', v) : localStorage.removeItem('mm.logo'); },
+    // endereço do servidor de impressão (opcional). Vazio = deduzido do
+    // host da API (mesma máquina); preencha só se a impressora estiver
+    // em outra máquina (ex.: impressora de rede, servidor de impressão
+    // dedicado).
+    get printServer() { return localStorage.getItem('mm.printServer') || ''; },
+    set printServer(v) { localStorage.setItem('mm.printServer', v.replace(/\/+$/, '')); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
     get conta() {
@@ -68,6 +74,7 @@
   // preenchido.
   const PRINT_PORT = 8127;
   function printServerUrl() {
+    if (cfg.printServer) return cfg.printServer;
     try {
       const u = new URL(cfg.apiUrl);
       return `${u.protocol}//${u.hostname}:${PRINT_PORT}`;
@@ -376,6 +383,9 @@
         <label>Impressora (caminho do compartilhamento; vazio = não imprime)</label>
         <input id="in-impressora" type="text" autocapitalize="off"
                placeholder="\\\\eric\\cupom" value="${esc(cfg.impressora)}">
+        <label>Servidor de impressão (opcional — só se a impressora não estiver no mesmo endereço da API)</label>
+        <input id="in-print-server" type="url" autocapitalize="off"
+               placeholder="deixe vazio para usar o endereço da API, porta 8127" value="${esc(cfg.printServer)}">
         <button id="btn-test-print" class="secondary" style="margin-top:8px">Testar impressora</button>
         <label>Logo da loja (impressa no topo do cupom)</label>
         <div class="row" style="margin-top:4px;gap:10px">
@@ -401,6 +411,7 @@
       cfg.apiPass = $('#in-api-pass').value;
       cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
       cfg.impressora = $('#in-impressora').value.trim();
+      cfg.printServer = $('#in-print-server').value.trim();
       cfg.scale = $('#in-scale').value === '1';
     };
     $('#in-logo').onchange = () => {
