@@ -82,13 +82,15 @@
     return data;
   }
 
-  // O retorno de VerficaCXAberto não tem um campo booleano único —
-  // interpreta pela mensagem/id (tolerante a variações do servidor)
+  // Interpreta o retorno de VerficaCXAberto. Regra: só é considerado
+  // FECHADO quando há sinal explícito disso (mensagem de "não está
+  // aberto"/"operação inválida"/"fechado"); qualquer outra resposta de
+  // sucesso é tratada como caixa ABERTO.
   function caixaEstaAberto(resp) {
-    const texto = JSON.stringify(resp).toLowerCase();
-    if (/n[ãa]o est[áa] aberto|opera[çc][ãa]o inv[áa]lida|fechado/.test(texto)) return false;
-    if (Number(resp?.id_sucess) === 1) return true;
-    return /aberto/.test(texto);
+    const texto = JSON.stringify(resp ?? {}).toLowerCase();
+    if (/n[ãa]o est[áa] aberto|opera[çc][ãa]o inv[áa]lida|fechado|caixa fechado/.test(texto))
+      return false;
+    return true;
   }
 
   // ---------- UI helpers ----------
@@ -101,6 +103,37 @@
     toastTimer = setTimeout(() => el.classList.add('hidden'), ms);
   }
   const setTitle = (t) => { $('#title').textContent = t; };
+  function showBack(handler) {
+    const b = $('#btn-back');
+    if (handler) { b.classList.remove('hidden'); b.onclick = handler; }
+    else { b.classList.add('hidden'); b.onclick = null; }
+  }
+
+  // ---------- inatividade (só na tela de operação) ----------
+  // 1 min parado: sem itens → volta ao início; com itens → cancela o
+  // cupom (CancelarConta) e volta ao início.
+  const INATIVIDADE_MS = window.__INATIVIDADE_TEST || 60000;
+  let inatividadeTimer = null;
+  function pararInatividade() { clearTimeout(inatividadeTimer); inatividadeTimer = null; }
+  function armarInatividade() {
+    pararInatividade();
+    inatividadeTimer = setTimeout(async () => {
+      if (screen !== 'shop') return;
+      const conta = cfg.conta;
+      if (conta.linhas.length > 0 && conta.barcode) {
+        try {
+          await tsm('POST', 'CancelarConta', {
+            nr_gerador: conta.barcode, nm_estacao: cfg.estacao,
+            valor_conta: '0', valor_acrescimo: '0',
+          });
+        } catch { /* segue para o início mesmo se falhar */ }
+        toast('Compra cancelada por inatividade');
+      }
+      cfg.conta = { barcode: '', linhas: [], canceladas: [] };
+      renderStart();
+    }, INATIVIDADE_MS);
+  }
+  const resetarInatividade = () => { if (screen === 'shop') armarInatividade(); };
 
   function openModal(html) {
     const overlay = document.createElement('div');
@@ -122,22 +155,24 @@
   // ---------- conta (carrinho espelhando a comanda do PDV) ----------
   // As linhas vêm do retorno do GravaItens (uma por unidade/pesagem);
   // para exibir, agrupa por produto.
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+
   function agrupar(linhas) {
     const map = new Map();
     for (const l of linhas) {
       const g = map.get(l.id) || {
         id: l.id, name: (l.name || l.description || '').trim(),
-        unidade: l.unidade || 'UN', unit_price: Number(l.unit_price),
+        unidade: (l.unidade || 'UN').toUpperCase(), unit_price: num(l.unit_price),
         qty: 0, total: 0,
       };
-      g.qty += Number(l.amount);
-      g.total += Number(l.total_price);
+      g.qty += num(l.amount);
+      g.total += num(l.total_price);
       map.set(l.id, g);
     }
     return [...map.values()];
   }
   const totalConta = (linhas) =>
-    linhas.reduce((s, l) => s + Number(l.total_price), 0);
+    linhas.reduce((s, l) => s + num(l.total_price), 0);
 
   async function gravaItens(consumo) {
     const conta = cfg.conta;
@@ -154,27 +189,27 @@
   }
 
   // Cancela UMA linha da comanda (a última passada do produto) via API
-  // própria do PDV; a resposta é a lista de linhas ainda ativas. A linha
-  // cancelada fica guardada para aparecer em vermelho na lista.
+  // própria do PDV (CancelarItem). Quem altera o banco é a API; o app só
+  // reflete a mudança localmente, movendo aquela linha — que ele já
+  // conhece pelo retorno do GravaItens — para a lista de canceladas
+  // (exibida em vermelho). Não interpreta o corpo do retorno, evitando
+  // linhas "NaN" quando o formato difere do esperado.
   async function cancelarItem(productId) {
     await checkPermission('CANCEL_ITEM_CX_FUN');
     const conta = cfg.conta;
     const doProduto = conta.linhas.filter((l) => l.id === productId);
     if (doProduto.length === 0) return;
-    const alvo = doProduto.reduce((a, b) => (a.contador > b.contador ? a : b));
-    const resp = await tsm('POST', 'CancelarItem', {
+    // cancela a última unidade passada desse produto (maior contador)
+    const alvo = doProduto.reduce((a, b) =>
+      (String(a.contador) > String(b.contador) ? a : b));
+    await tsm('POST', 'CancelarItem', {
       nr_gerador: conta.barcode,
       ordem_item: alvo.contador,
     });
-    const ativas = Array.isArray(resp)
-      ? resp
-      : conta.linhas.filter((l) => l.contador !== alvo.contador);
-    const vivos = new Set(ativas.map((l) => l.contador));
-    const novasCanceladas = conta.linhas.filter((l) => !vivos.has(l.contador));
     cfg.conta = {
       barcode: conta.barcode,
-      linhas: ativas,
-      canceladas: [...conta.canceladas, ...novasCanceladas],
+      linhas: conta.linhas.filter((l) => l.contador !== alvo.contador),
+      canceladas: [...conta.canceladas, alvo],
     };
   }
 
@@ -184,6 +219,7 @@
   async function processCode(raw) {
     const code = raw.trim();
     if (!code) return;
+    resetarInatividade(); // leitura pela câmera também conta como interação
     const now = Date.now();
     if (code === lastScan.code && now - lastScan.at < 2500) return; // anti-duplo-scan
     lastScan = { code, at: now };
@@ -255,6 +291,7 @@
   // ---------- telas ----------
   async function renderSettings() {
     screen = 'settings';
+    pararInatividade(); showBack(null);
     await stopScanner();
     setTitle('Configurações');
     view.innerHTML = `
@@ -308,6 +345,7 @@
   // Verifica caixa aberto ao entrar (regra do fluxo)
   async function renderCaixaCheck() {
     screen = 'caixa-check';
+    pararInatividade(); showBack(null);
     await stopScanner();
     setTitle(cfg.empresa || 'MarketMe');
     view.innerHTML = '<p class="center" style="padding:40px"><span class="spinner"></span><br><br>Verificando caixa…</p>';
@@ -326,6 +364,7 @@
 
   function renderAbrirCaixa() {
     screen = 'abrir-caixa';
+    pararInatividade(); showBack(null);
     setTitle(cfg.empresa || 'MarketMe');
     view.innerHTML = `
       <div class="card center" style="margin-top:30px">
@@ -351,6 +390,7 @@
   // superior direito: segurar o dedo ~1s revela "Fechar caixa" e "Sair"
   function renderStart() {
     screen = 'start';
+    pararInatividade(); showBack(null);
     stopScanner();
     setTitle(cfg.empresa || 'MarketMe');
     view.innerHTML = `
@@ -396,6 +436,7 @@
 
   function renderFecharCaixa() {
     screen = 'fechar-caixa';
+    pararInatividade(); showBack(null);
     setTitle('Fechar caixa');
     view.innerHTML = `
       <div class="card center" style="margin-top:30px">
@@ -451,6 +492,7 @@
     });
 
     refreshCart();
+    armarInatividade(); // conta 1 min de inatividade nesta tela
 
     try {
       scanner = new Html5Qrcode('reader');
@@ -479,7 +521,12 @@
   function refreshCart() {
     const area = $('#cart-area');
     if (!area) return;
-    const { linhas, canceladas } = cfg.conta;
+    const { barcode, linhas, canceladas } = cfg.conta;
+    // botão "voltar" no topo só enquanto nada foi passado (comanda não
+    // aberta no servidor); depois disso o usuário finaliza ou cancela
+    if (!barcode && linhas.length === 0)
+      showBack(() => { pararInatividade(); renderStart(); });
+    else showBack(null);
     if (linhas.length === 0 && canceladas.length === 0) {
       area.innerHTML = '<p class="center muted" style="padding:16px">Nenhum item ainda — passe o primeiro produto.</p>';
       return;
@@ -541,6 +588,7 @@
 
   async function renderPayment() {
     screen = 'payment';
+    pararInatividade(); showBack(null);
     await stopScanner();
     setTitle('Fechar conta');
     const { linhas, barcode } = cfg.conta;
@@ -576,6 +624,7 @@
 
   function renderSuccess(total, msg) {
     screen = 'success';
+    pararInatividade(); showBack(null);
     setTitle('Conta fechada');
     view.innerHTML = `
       <div class="card center">
@@ -610,6 +659,10 @@
       }
     });
   })();
+
+  // qualquer toque/tecla reinicia a contagem de inatividade na operação
+  document.addEventListener('pointerdown', resetarInatividade, true);
+  document.addEventListener('keydown', resetarInatividade, true);
 
   // ---------- navegação ----------
   $('#btn-settings').onclick = () => renderSettings();
