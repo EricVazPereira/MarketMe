@@ -89,7 +89,7 @@ input, select {
   margin-top: 4px;
 }
 label { font-size: 0.85rem; color: var(--muted); display: block; margin-top: 12px; }
-.shop-headline { font-size: 1.3rem; font-weight: 700; text-align: center; margin-bottom: 4px; }
+.shop-headline { font-size: 1.3rem; font-weight: 700; text-align: center; margin-bottom: 12px; }
 
 .qty-controls { display: flex; align-items: center; gap: 10px; }
 .qty-controls button {

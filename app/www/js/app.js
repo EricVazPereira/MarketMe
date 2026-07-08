@@ -376,6 +376,7 @@
         <label>Impressora (caminho do compartilhamento; vazio = não imprime)</label>
         <input id="in-impressora" type="text" autocapitalize="off"
                placeholder="\\\\eric\\cupom" value="${esc(cfg.impressora)}">
+        <button id="btn-test-print" class="secondary" style="margin-top:8px">Testar impressora</button>
         <label>Logo da loja (impressa no topo do cupom)</label>
         <div class="row" style="margin-top:4px;gap:10px">
           <img id="logo-preview" src="${esc(cfg.logo)}" class="${cfg.logo ? '' : 'hidden'}"
@@ -434,6 +435,23 @@
         $('#empresa-info').textContent = `✔ Conectado: ${nome}`;
         toast(`Empresa: ${nome}`);
       } catch (e) { toast(`Erro: ${e.message}`); }
+    };
+    // Confere se o serviço printer/ está de pé no endereço deduzido da
+    // API (mesmo host, porta 8127), sem precisar fechar uma conta pra
+    // descobrir que a impressora não vai funcionar.
+    $('#btn-test-print').onclick = async () => {
+      saveFields();
+      const base = printServerUrl();
+      if (!base) return toast('Informe o endereço da API primeiro');
+      try {
+        const res = await fetch(`${base}/health`);
+        if (!res.ok) throw new Error(`respondeu ${res.status}`);
+        const data = await res.json().catch(() => ({}));
+        toast(`✔ Servidor de impressão OK em ${base}${data.dryRun ? ' (modo teste/dry-run)' : ''}`);
+      } catch (e) {
+        const msg = e.message === 'Failed to fetch' ? `não respondeu em ${base}` : e.message;
+        toast(`⚠️ Servidor de impressão: ${msg}`);
+      }
     };
     $('#btn-save').onclick = async () => {
       saveFields();
@@ -532,9 +550,8 @@
     view.innerHTML = `
       <div class="card">
         <div class="shop-headline">Passe o produto no leitor</div>
-        <label>Código do produto</label>
         <div class="row" style="margin-top:4px">
-          <input id="in-ean" class="grow" type="text" inputmode="numeric" placeholder="bipe ou digite o código" autofocus>
+          <input id="in-ean" class="grow" type="text" inputmode="numeric" autofocus>
           <button id="btn-add-ean" class="primary" style="width:110px">Adicionar</button>
         </div>
       </div>
@@ -657,7 +674,11 @@
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `impressora respondeu ${res.status}`);
     } catch (e) {
-      toast(`⚠️ Cupom não impresso: ${e.message}`);
+      // "Failed to fetch" é o TypeError genérico do fetch quando a
+      // conexão nem chega a acontecer (serviço parado, IP/porta errados,
+      // firewall) — mostra o endereço tentado pra dar pra diagnosticar.
+      const msg = e.message === 'Failed to fetch' ? `não respondeu em ${base}` : e.message;
+      toast(`⚠️ Cupom não impresso: ${msg}`);
     }
   }
 

@@ -113,6 +113,15 @@ Se o cupom fechar mas não sair na impressora, o app mostra um aviso
 reconhece o caminho preenchido em Impressora. A venda **não é
 desfeita** nesse caso.
 
+Use o botão **"Testar impressora"** (em Configurações, logo abaixo do
+campo Impressora) para checar a conexão sem precisar fechar uma venda
+de verdade — ele chama `GET /health` no endereço deduzido e mostra se
+respondeu ou não. Erro **"Failed to fetch" / "não respondeu"** quase
+sempre significa que o `npm start` de `printer/` não está rodando
+nesse momento naquele PC — ele precisa ficar de pé o tempo todo (por
+exemplo, como tarefa agendada/serviço do Windows), não só durante o
+teste.
+
 ### Como funciona
 
 1. Depois que `FechamentoComandaSmartPDV` confirma o fechamento, o app
