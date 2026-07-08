@@ -1,0 +1,123 @@
+// Monta o buffer ESC/POS do cupom (64 colunas, Fonte B), no mesmo
+// layout usado pelo Caixa Livre.
+//
+// Cupom NÃO-FISCAL: o MarketMe ainda não emite NFC-e (isso é fase
+// futura — precisa de autorização fiscal via SAT/SEFAZ). Por isso o
+// cabeçalho diz "CUPOM NAO FISCAL" em vez de "CUPOM FISCAL ELETRONICO
+// - NFC-e", e não há QR code/protocolo de autorização — imprimir isso
+// sem uma emissão fiscal real por trás seria enganoso. A função
+// qrEscPos já está pronta em escpos.js para quando essa fase chegar.
+import { CMD, COLS, t, padRight, padLeft, center, moneyBR } from './escpos.js';
+
+// larguras fixas da tabela de itens (soma = 64)
+const W = { n: 3, sep: 1, codigo: 7, descricao: 29, qt: 8, vlUn: 8, total: 8 };
+
+function onlyDigits(s) {
+  return String(s ?? '').replace(/\D/g, '');
+}
+function formatCNPJ(v) {
+  const d = onlyDigits(v).padStart(14, '0');
+  return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`;
+}
+function formatCEP(v) {
+  const d = onlyDigits(v).padStart(8, '0');
+  return `${d.slice(0, 5)}-${d.slice(5)}`;
+}
+function formatCPF(v) {
+  const d = onlyDigits(v);
+  if (d.length !== 11) return d;
+  return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`;
+}
+
+// código do produto encurtado para as 6 posições da coluna CODIGO
+// (o ERP usa códigos de até 14 dígitos, ex.: "00000000000002")
+function shortCode(id) {
+  const semZeros = String(id ?? '').replace(/^0+/, '') || '0';
+  return semZeros.length > 6 ? semZeros.slice(-6) : semZeros.padStart(6, '0');
+}
+
+export function itemLine({ n, codigo, descricao, qt, vlUn, total }) {
+  return (
+    padLeft(n, W.n) +
+    ' '.repeat(W.sep) +
+    padRight(`${codigo} `, W.codigo) +
+    padRight(descricao, W.descricao) +
+    padLeft(qt, W.qt) +
+    padLeft(vlUn, W.vlUn) +
+    padLeft(total, W.total)
+  );
+}
+
+export function headerLine() {
+  return itemLine({ n: 'N', codigo: 'CODIGO', descricao: 'DESCRICAO', qt: 'QT', vlUn: 'VL UN', total: 'TOTAL' });
+}
+
+function formatQtd(qty, unidade) {
+  return unidade === 'KG' ? `${Number(qty).toFixed(3).replace('.', ',')}KG` : `${Number(qty)}UN`;
+}
+
+/**
+ * @param {object} p
+ * @param {object} p.empresa - retorno de PegaDadosEmpresa
+ * @param {Array}  p.itens   - linhas ativas da comanda (formato GravaItens)
+ * @param {string} p.formaPagamento - ex.: "PIX", "Cartao de Credito"
+ * @param {number} p.total
+ * @param {string} [p.cpf]
+ * @param {Date}   [p.dataHora]
+ */
+export function buildCupom({ empresa, itens, formaPagamento, total, cpf, dataHora = new Date() }) {
+  const chunks = [CMD.INIT, CMD.FONT_B, CMD.LINE_SPACING_TIGHT];
+
+  // cabeçalho da empresa
+  chunks.push(CMD.ALIGN_CENTER, CMD.BOLD_ON);
+  chunks.push(t(empresa?.['Nome Fantasia'] || empresa?.['Razao Social'] || ''));
+  chunks.push(CMD.BOLD_OFF);
+  const endereco = [empresa?.Rua, empresa?.Numero].filter(Boolean).join(' ');
+  if (endereco) chunks.push(t(endereco));
+  const bairroCidade = [empresa?.Bairro, [empresa?.Cidade, empresa?.UF].filter(Boolean).join('/')]
+    .filter(Boolean).join(' - ');
+  if (bairroCidade) chunks.push(t(bairroCidade));
+  if (empresa?.CNPJ) chunks.push(t(`CNPJ: ${formatCNPJ(empresa.CNPJ)}`));
+  if (empresa?.Cep) chunks.push(t(`CEP.: ${formatCEP(empresa.Cep)}`));
+  if (empresa?.Telefone) chunks.push(t(`TEL.: ${empresa.Telefone}`));
+  if (empresa?.IE) chunks.push(t(`IE..: ${empresa.IE}`));
+  chunks.push(t(''));
+  chunks.push(CMD.BOLD_ON, t('CUPOM NAO FISCAL'), t('COMPROVANTE DE COMPRA'), CMD.BOLD_OFF);
+  chunks.push(t(''));
+
+  // itens
+  chunks.push(CMD.ALIGN_LEFT, CMD.BOLD_ON, t(headerLine()), CMD.BOLD_OFF);
+  itens.forEach((it, i) => {
+    const isKg = String(it.unidade).toUpperCase() === 'KG';
+    chunks.push(t(itemLine({
+      n: i + 1,
+      codigo: shortCode(it.id),
+      descricao: (it.name || it.description || '').trim(),
+      qt: formatQtd(it.amount, isKg ? 'KG' : 'UN'),
+      vlUn: moneyBR(it.unit_price),
+      total: moneyBR(it.total_price),
+    })));
+  });
+
+  chunks.push(t('-'.repeat(COLS)));
+  chunks.push(CMD.BOLD_ON);
+  chunks.push(t(padRight('VALOR TOTAL R$', COLS - W.total) + padLeft(moneyBR(total), W.total)));
+  chunks.push(CMD.BOLD_OFF);
+
+  // pagamento
+  chunks.push(t(''));
+  chunks.push(t(padRight('FORMA DE PAGAMENTO', COLS - 10) + padLeft('VALOR PAGO', 10)));
+  chunks.push(t(padRight(formaPagamento || '-', COLS - 10) + padLeft(moneyBR(total), 10)));
+  if (cpf) chunks.push(t(''), CMD.ALIGN_CENTER, t(`CPF: ${formatCPF(cpf)}`), CMD.ALIGN_LEFT);
+
+  chunks.push(t(''));
+  chunks.push(CMD.ALIGN_CENTER);
+  const dt = dataHora.toLocaleString('pt-BR', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  chunks.push(t(dt));
+
+  chunks.push(CMD.LINE_SPACING_DEFAULT, CMD.FEED_3, CMD.CUT);
+  return Buffer.concat(chunks);
+}

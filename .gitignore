@@ -2,3 +2,4 @@ node_modules/
 .env
 *.log
 app/android/build/
+printer/dry-run/

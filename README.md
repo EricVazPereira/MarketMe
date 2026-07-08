@@ -9,15 +9,26 @@ que embasa o produto: [`PESQUISA_MERCADO_AUTONOMO.md`](./PESQUISA_MERCADO_AUTONO
 ```
 Tablet (APK MarketMe)
    │  HTTP na rede local
-   ▼
-Servidor de API do ERP (Server ZF, ex.: http://192.168.0.18:81)
-   └─ /datasnap/rest/TSM/…  → banco do ERP (configurado no .ini do servidor)
+   ├──────────────────────────────► Servidor de API do ERP (Server ZF)
+   │                                  └─ /datasnap/rest/TSM/…
+   │                                     (banco/autenticação no .ini do servidor)
+   │
+   └──────────────────────────────► Servidor de impressão (printer/)
+                                       └─ roda no PC com a impressora
+                                          (mesma máquina que enxerga \\eric\cupom)
 ```
 
 O app fala **direto com a API** — configura-se apenas o endereço base
 nas configurações do app; o caminho `/datasnap/rest/TSM/...` é
 completado automaticamente. O banco de dados e a autenticação ficam no
 `.ini` do próprio Server ZF (nada disso fica no tablet).
+
+A impressão do cupom é feita por um **servidor separado** (pasta
+`printer/`), porque o tablet Android não enxerga caminhos de rede do
+Windows (`\\eric\cupom`) — só o PC consegue. Esse servidor roda nessa
+mesma máquina e escreve direto no spooler de impressão (WinSpool via
+FFI), sem depender do Server ZF. Se `printServer` não for configurado
+no app, a impressão simplesmente não acontece (recurso opcional).
 
 ## Fluxo do PDV (como o app funciona)
 
@@ -28,23 +39,82 @@ completado automaticamente. O banco de dados e a autenticação ficam no
 2. Ao entrar, o app **verifica o caixa** (`VerficaCXAberto`):
    - aberto → tela **"Toque para iniciar"**;
    - fechado → botão **"Abrir caixa"** (`AberturaCX`, operador 0).
-3. Na tela inicial há **botões escondidos**: segure o dedo ~1s no canto
-   superior direito para revelar **Fechar caixa** e **Sair**.
-   - Fechar caixa → tela "Fechar caixa?" com [Voltar] e
-     [Sim, fechar o caixa] (`FechamentoCX`) → volta à abertura de caixa.
-   - Sair → encerra o aplicativo.
-4. **Passar produtos**: câmera, digitação ou leitor físico (modo
-   teclado). Cada código é consultado em `ConsultaFormatoProduto/{cod}`
-   — se `un_pro = KG` o app pede o peso (ou lê da etiqueta de balança) —
-   e gravado via **`GravaItens`** com o preço do cadastro. O `barcode`
-   devolvido na primeira gravação vira o `ID` do cabeçalho nas
-   gravações seguintes (mesma comanda).
+3. **Engrenagem** (⚙, topo direito): pede código+senha do operador,
+   valida em `VerificaPermissaoUsuario` (`CANCEL_CONTA_CX_FUN`) e abre
+   **só as Configurações**. Segurar 2s em cima do **nome da loja**
+   (tela inicial) revela **Fechar caixa** (`FechamentoCX` → volta à
+   abertura) e **Sair do app**.
+4. **Passar produtos**: câmera (com mira central), digitação ou leitor
+   físico (modo teclado, funciona em qualquer tela). Cada código é
+   consultado em `ConsultaFormatoProduto/{cod}` — se `un_pro = KG` o
+   app pede o peso (ou lê da etiqueta de balança) — e gravado via
+   **`GravaItens`** com o preço do cadastro. O `barcode` devolvido na
+   primeira gravação vira o `ID` do cabeçalho nas gravações seguintes
+   (mesma comanda). 1 min de inatividade sem itens volta ao início; com
+   itens, cancela o cupom (`CancelarConta`) e volta ao início.
 5. **Fechar conta**: CPF opcional → `FechamentoComandaSmartPDV`
-   (subtotal/total/barcode/`operadora_smart_pdv = PIX|total|`).
-6. **Cancelamentos** exigem autorização de operador via API de permissão:
-   - cancelar item → `funcao: CANCEL_ITEM_CX_FUN` (estorno enviado como
-     `GravaItens` com quantidade negativa);
-   - cancelar conta → `funcao: CANCEL_CONTA_CX_FUN`.
+   (subtotal/total/barcode/`operadora_smart_pdv = PIX|total|`). Se
+   houver servidor de impressão configurado, o cupom é impresso em
+   seguida (ver seção **Impressão do cupom** abaixo).
+6. **Cancelamentos**:
+   - cancelar item (✕ na linha) → permissão silenciosa
+     (`CANCEL_ITEM_CX_FUN`, código/senha fixos) + `CancelarItem
+     {nr_gerador, ordem_item}`; a linha cancelada some da comanda mas
+     permanece visível na lista, em vermelho e riscada;
+   - cancelar conta → confirmação na tela + permissão
+     (`CANCEL_CONTA_CX_FUN`) + `CancelarConta {nr_gerador, nm_estacao,
+     valor_conta, valor_acrescimo}`.
+
+## Impressão do cupom
+
+Servidor separado em [`printer/`](./printer), pensado para rodar **no
+mesmo PC Windows que enxerga a impressora** (o mesmo caminho `\\eric\
+cupom` que você usaria no Explorer). Formato do cupom espelha o do
+Caixa Livre: 64 colunas, Fonte B, ESC/POS puro, impressão RAW via
+WinSpool (sem passar por driver/PowerShell a cada cupom).
+
+**Cupom não-fiscal por enquanto** — sem QR code nem protocolo de
+autorização NFC-e, porque o MarketMe ainda não emite nota fiscal
+eletrônica (isso depende de integração com SAT/SEFAZ, fase futura).
+Imprimir uma seção "CUPOM FISCAL ELETRONICO" sem uma emissão fiscal de
+verdade por trás seria enganoso, então o cabeçalho diz **"CUPOM NAO
+FISCAL — COMPROVANTE DE COMPRA"**. A função `qrEscPos()` já existe em
+`printer/src/escpos.js`, pronta para quando a emissão fiscal entrar.
+
+### Rodando o servidor de impressão
+
+```bash
+cd printer
+npm install
+npm start                    # produção: precisa ser Windows (usa WinSpool)
+PRINT_DRY_RUN=1 npm start    # desenvolvimento: grava .prn em printer/dry-run/
+                              # em vez de imprimir (funciona em qualquer SO)
+```
+
+Escuta em `http://localhost:8127` por padrão (`PRINT_PORT` no ambiente
+muda a porta). No app, em Configurações, preencha:
+
+- **Impressora**: o caminho/nome usado pelo Windows (`\\eric\cupom`);
+- **Servidor de impressão**: endereço deste serviço na rede
+  (`http://IP-DO-PC:8127`) — **deixe vazio para não imprimir**.
+
+### Como funciona
+
+1. Depois que `FechamentoComandaSmartPDV` confirma o fechamento, o app
+   chama `POST /imprimir` no servidor de impressão com os itens da
+   comanda, os dados da empresa (guardados de `PegaDadosEmpresa` ao
+   testar a conexão), forma de pagamento, total e CPF.
+2. `printer/src/cupom.js` monta o buffer ESC/POS (`buildCupom`).
+3. `printer/src/winspool.js` manda os bytes pro spooler
+   (`OpenPrinterW`/`WritePrinter` via `koffi`, biblioteca FFI —
+   mesmo mecanismo do Caixa Livre).
+4. Falha na impressão **nunca desfaz a venda**: só mostra um aviso no
+   tablet para o operador conferir a impressora.
+
+```bash
+cd printer && npm test   # valida o layout do cupom (64 colunas, bytes
+                          # ESC/POS, formatação de valores/CPF/CNPJ)
+```
 
 ## Endpoints usados (base configurável no app)
 

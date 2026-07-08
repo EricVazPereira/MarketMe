@@ -23,9 +23,19 @@
     set apiPass(v) { localStorage.setItem('mm.apiPass', v); },
     get empresa() { return localStorage.getItem('mm.empresa') || ''; },
     set empresa(v) { localStorage.setItem('mm.empresa', v); },
+    // dados completos da empresa (PegaDadosEmpresa), para o cabeçalho do cupom
+    get empresaDados() {
+      try { return JSON.parse(localStorage.getItem('mm.empresaDados')) || null; }
+      catch { return null; }
+    },
+    set empresaDados(v) { localStorage.setItem('mm.empresaDados', JSON.stringify(v || {})); },
     // caminho/compartilhamento da impressora (ex.: \\eric\cupom)
     get impressora() { return localStorage.getItem('mm.impressora') || ''; },
     set impressora(v) { localStorage.setItem('mm.impressora', v); },
+    // endereço do servidor de impressão (roda no PC com a impressora);
+    // vazio = impressão desativada
+    get printServer() { return localStorage.getItem('mm.printServer') || ''; },
+    set printServer(v) { localStorage.setItem('mm.printServer', v.replace(/\/+$/, '')); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
     get conta() {
@@ -365,6 +375,9 @@
         <label>Impressora (caminho do compartilhamento)</label>
         <input id="in-impressora" type="text" autocapitalize="off"
                placeholder="\\\\eric\\cupom" value="${esc(cfg.impressora)}">
+        <label>Servidor de impressão (PC com a impressora; vazio = não imprime)</label>
+        <input id="in-print-server" type="url" autocapitalize="off"
+               placeholder="http://192.168.0.18:8127" value="${esc(cfg.printServer)}">
         <label>Balança integrada (etiqueta com peso no código de barras)</label>
         <select id="in-scale">
           <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
@@ -382,6 +395,7 @@
       cfg.apiPass = $('#in-api-pass').value;
       cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
       cfg.impressora = $('#in-impressora').value.trim();
+      cfg.printServer = $('#in-print-server').value.trim();
       cfg.scale = $('#in-scale').value === '1';
     };
     $('#btn-test').onclick = async () => {
@@ -390,6 +404,7 @@
         const emp = await tsm('GET', 'PegaDadosEmpresa');
         const nome = emp['Nome Fantasia'] || emp['Razao Social'] || '?';
         cfg.empresa = nome;
+        cfg.empresaDados = emp; // guardado inteiro p/ o cabeçalho do cupom
         $('#empresa-info').textContent = `✔ Conectado: ${nome}`;
         toast(`Empresa: ${nome}`);
       } catch (e) { toast(`Erro: ${e.message}`); }
@@ -613,6 +628,33 @@
     $('#btn-fechar-conta').onclick = () => renderPayment();
   }
 
+  const FORMA_PAGAMENTO = 'PIX'; // usada no fechamento e no cupom impresso
+
+  // Pede ao servidor de impressão (roda no PC com a impressora) para
+  // imprimir o cupom. Opcional: sem cfg.printServer configurado, não faz
+  // nada. Falha na impressão nunca desfaz a venda — só avisa o operador.
+  async function imprimirCupom({ linhas, total, cpf }) {
+    if (!cfg.printServer) return;
+    try {
+      const res = await fetch(`${cfg.printServer}/imprimir`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          printerPath: cfg.impressora,
+          empresa: cfg.empresaDados,
+          itens: linhas,
+          formaPagamento: FORMA_PAGAMENTO,
+          total,
+          cpf,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `impressora respondeu ${res.status}`);
+    } catch (e) {
+      toast(`⚠️ Cupom não impresso: ${e.message}`);
+    }
+  }
+
   async function renderPayment() {
     screen = 'payment';
     pararInatividade(); showBack(null);
@@ -630,19 +672,21 @@
       </div>`;
     $('#btn-voltar').onclick = () => renderShop();
     $('#btn-confirmar').onclick = async () => {
+      const cpf = $('#in-cpf').value.replace(/\D/g, '');
       try {
         const r = await tsm('POST', 'FechamentoComandaSmartPDV', {
           subtotal: total.toFixed(2),
           total: total.toFixed(2),
           barcode,
           discount: '0',
-          cpf: $('#in-cpf').value.replace(/\D/g, ''),
+          cpf,
           add_service: '0',
-          operadora_smart_pdv: `PIX|${total.toFixed(2)}|`,
+          operadora_smart_pdv: `${FORMA_PAGAMENTO}|${total.toFixed(2)}|`,
           nm_estacao: cfg.estacao,
         });
         if (r && r.sucess === false)
           return toast(r.message_sucess || 'não foi possível fechar a conta');
+        await imprimirCupom({ linhas, total, cpf });
         cfg.conta = { barcode: '', linhas: [], canceladas: [] };
         renderSuccess(total, r?.message_sucess);
       } catch (e) { toast(`⚠️ ${e.message}`); }
