@@ -11,15 +11,22 @@
   const PERMISSAO_METODO = 'VerificaPermissaoUsuario';
 
   // ---------- configuração ----------
+  // Valores padrão do ambiente do lojista — evitam ter que redigitar
+  // tudo a cada reinstalação do APK de teste. Continuam editáveis nas
+  // Configurações; o que for salvo ali tem prioridade.
+  const PADRAO_API_URL = 'http://192.168.0.130:81';
+  const PADRAO_API_USER = 'TOKEN_AUTENTICACAO_API';
+  const PADRAO_API_PASS = '123';
+
   const cfg = {
-    get apiUrl() { return localStorage.getItem('mm.apiUrl') || ''; },
+    get apiUrl() { return localStorage.getItem('mm.apiUrl') || PADRAO_API_URL; },
     set apiUrl(v) { localStorage.setItem('mm.apiUrl', v.replace(/\/+$/, '')); },
     get estacao() { return localStorage.getItem('mm.estacao') || 'DEVELOP'; },
     set estacao(v) { localStorage.setItem('mm.estacao', v); },
     // credenciais da API (as mesmas do .ini do Server ZF)
-    get apiUser() { return localStorage.getItem('mm.apiUser') || ''; },
+    get apiUser() { return localStorage.getItem('mm.apiUser') || PADRAO_API_USER; },
     set apiUser(v) { localStorage.setItem('mm.apiUser', v); },
-    get apiPass() { return localStorage.getItem('mm.apiPass') || ''; },
+    get apiPass() { return localStorage.getItem('mm.apiPass') || PADRAO_API_PASS; },
     set apiPass(v) { localStorage.setItem('mm.apiPass', v); },
     get empresa() { return localStorage.getItem('mm.empresa') || ''; },
     set empresa(v) { localStorage.setItem('mm.empresa', v); },
@@ -35,12 +42,6 @@
     // logo da loja (data URL), impressa no topo do cupom
     get logo() { return localStorage.getItem('mm.logo') || ''; },
     set logo(v) { v ? localStorage.setItem('mm.logo', v) : localStorage.removeItem('mm.logo'); },
-    // endereço do servidor de impressão (opcional). Vazio = deduzido do
-    // host da API (mesma máquina); preencha só se a impressora estiver
-    // em outra máquina (ex.: impressora de rede, servidor de impressão
-    // dedicado).
-    get printServer() { return localStorage.getItem('mm.printServer') || ''; },
-    set printServer(v) { localStorage.setItem('mm.printServer', v.replace(/\/+$/, '')); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
     get conta() {
@@ -68,17 +69,19 @@
   // preços do ERP vêm como "1,00" (vírgula decimal)
   const parseBR = (v) => Number(String(v ?? '0').replace(/\./g, '').replace(',', '.'));
 
-  // endereço do servidor de impressão (roda no PC com a impressora):
-  // mesma máquina/host da API, porta fixa 8127 — sem campo próprio nas
-  // configurações, só o caminho da impressora (\\eric\cupom) precisa ser
-  // preenchido.
+  // O único campo de impressão é "Impressora" (caminho de rede, ex.:
+  // \\eric\cupom ou \\192.168.1.50\cupom). O serviço que efetivamente
+  // imprime (printer/) roda nessa mesma máquina identificada no
+  // caminho, numa porta fixa que o operador não precisa saber — o app
+  // extrai o host direto do \\HOST\compartilhamento digitado.
   const PRINT_PORT = 8127;
+  function impressoraHost(caminho) {
+    const m = String(caminho || '').trim().match(/^\\{2}([^\\/]+)/);
+    return m ? m[1] : '';
+  }
   function printServerUrl() {
-    if (cfg.printServer) return cfg.printServer;
-    try {
-      const u = new URL(cfg.apiUrl);
-      return `${u.protocol}//${u.hostname}:${PRINT_PORT}`;
-    } catch { return ''; }
+    const host = impressoraHost(cfg.impressora);
+    return host ? `http://${host}:${PRINT_PORT}` : '';
   }
 
   // ---------- API DataSnap ----------
@@ -380,13 +383,10 @@
         <input id="in-api-pass" type="password" value="${esc(cfg.apiPass)}">
         <label>Nome da estação (nm_estacao)</label>
         <input id="in-estacao" type="text" autocapitalize="characters" value="${esc(cfg.estacao)}">
-        <label>Impressora (caminho do compartilhamento; vazio = não imprime)</label>
+        <label>Impressora (caminho de rede; vazio = não imprime)</label>
         <input id="in-impressora" type="text" autocapitalize="off"
                placeholder="\\\\eric\\cupom" value="${esc(cfg.impressora)}">
-        <label>Servidor de impressão (opcional — só se a impressora não estiver no mesmo endereço da API)</label>
-        <input id="in-print-server" type="url" autocapitalize="off"
-               placeholder="deixe vazio para usar o endereço da API, porta 8127" value="${esc(cfg.printServer)}">
-        <button id="btn-test-print" class="secondary" style="margin-top:8px">Testar impressora</button>
+        <button id="btn-test-print" class="secondary" style="margin-top:8px">Imprimir página de teste</button>
         <label>Logo da loja (impressa no topo do cupom)</label>
         <div class="row" style="margin-top:4px;gap:10px">
           <img id="logo-preview" src="${esc(cfg.logo)}" class="${cfg.logo ? '' : 'hidden'}"
@@ -411,7 +411,6 @@
       cfg.apiPass = $('#in-api-pass').value;
       cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
       cfg.impressora = $('#in-impressora').value.trim();
-      cfg.printServer = $('#in-print-server').value.trim();
       cfg.scale = $('#in-scale').value === '1';
     };
     $('#in-logo').onchange = () => {
@@ -447,21 +446,27 @@
         toast(`Empresa: ${nome}`);
       } catch (e) { toast(`Erro: ${e.message}`); }
     };
-    // Confere se o serviço printer/ está de pé no endereço deduzido da
-    // API (mesmo host, porta 8127), sem precisar fechar uma conta pra
-    // descobrir que a impressora não vai funcionar.
+    // Manda imprimir mesmo uma página de teste no caminho digitado —
+    // prova real de que a rede encontra a impressora, sem precisar
+    // fechar uma venda pra descobrir que não vai funcionar.
     $('#btn-test-print').onclick = async () => {
       saveFields();
+      if (!cfg.impressora) return toast('Informe o caminho da impressora primeiro');
       const base = printServerUrl();
-      if (!base) return toast('Informe o endereço da API primeiro');
+      if (!base)
+        return toast('Caminho inválido — use um endereço de rede, ex.: \\\\eric\\cupom');
       try {
-        const res = await fetch(`${base}/health`);
-        if (!res.ok) throw new Error(`respondeu ${res.status}`);
+        const res = await fetch(`${base}/teste`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ printerPath: cfg.impressora }),
+        });
         const data = await res.json().catch(() => ({}));
-        toast(`✔ Servidor de impressão OK em ${base}${data.dryRun ? ' (modo teste/dry-run)' : ''}`);
+        if (!res.ok) throw new Error(data.error || `respondeu ${res.status}`);
+        toast(`✔ Página de teste enviada para ${cfg.impressora}`);
       } catch (e) {
         const msg = e.message === 'Failed to fetch' ? `não respondeu em ${base}` : e.message;
-        toast(`⚠️ Servidor de impressão: ${msg}`);
+        toast(`⚠️ Não imprimiu: ${msg}`);
       }
     };
     $('#btn-save').onclick = async () => {
@@ -667,7 +672,8 @@
   async function imprimirCupom({ linhas, total, cpf }) {
     if (!cfg.impressora) return;
     const base = printServerUrl();
-    if (!base) return toast('⚠️ Cupom não impresso: configure o endereço da API');
+    if (!base)
+      return toast('⚠️ Cupom não impresso: caminho da impressora inválido (use \\\\host\\compartilhamento)');
     try {
       const res = await fetch(`${base}/imprimir`, {
         method: 'POST',

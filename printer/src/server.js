@@ -7,7 +7,7 @@
 // do cupom em qualquer SO, sem impressora nem Windows.
 import { mkdir, writeFile } from 'node:fs/promises';
 import express from 'express';
-import { buildCupom } from './cupom.js';
+import { buildCupom, buildPaginaTeste } from './cupom.js';
 import { rawPrint } from './winspool.js';
 
 const PORT = Number(process.env.PRINT_PORT ?? 8127);
@@ -26,6 +26,23 @@ app.use((req, res, next) => {
 
 app.get('/health', (_req, res) => res.json({ ok: true, dryRun: DRY_RUN }));
 
+async function enviarParaImpressora(res, printerPath, buffer, prefixo) {
+  try {
+    if (DRY_RUN) {
+      await mkdir(DRY_RUN_DIR, { recursive: true });
+      const file = new URL(`${prefixo}-${Date.now()}.prn`, DRY_RUN_DIR);
+      await writeFile(file, buffer);
+      console.log(`[dry-run] gravado em ${file.pathname}`);
+      return res.json({ ok: true, dryRun: true, bytes: buffer.length });
+    }
+    const written = rawPrint(printerPath, buffer);
+    res.json({ ok: true, dryRun: false, bytes: written });
+  } catch (err) {
+    console.error('Falha ao imprimir:', err.message);
+    res.status(502).json({ error: `falha ao imprimir: ${err.message}` });
+  }
+}
+
 app.post('/imprimir', async (req, res) => {
   const { printerPath, empresa, itens, formaPagamento, total, cpf, logoBase64 } = req.body ?? {};
   if (!printerPath) return res.status(400).json({ error: 'printerPath é obrigatório' });
@@ -38,21 +55,17 @@ app.post('/imprimir', async (req, res) => {
   } catch (err) {
     return res.status(500).json({ error: `falha ao montar o cupom: ${err.message}` });
   }
+  await enviarParaImpressora(res, printerPath, buffer, 'cupom');
+});
 
-  try {
-    if (DRY_RUN) {
-      await mkdir(DRY_RUN_DIR, { recursive: true });
-      const file = new URL(`cupom-${Date.now()}.prn`, DRY_RUN_DIR);
-      await writeFile(file, buffer);
-      console.log(`[dry-run] cupom gravado em ${file.pathname}`);
-      return res.json({ ok: true, dryRun: true, bytes: buffer.length });
-    }
-    const written = rawPrint(printerPath, buffer);
-    res.json({ ok: true, dryRun: false, bytes: written });
-  } catch (err) {
-    console.error('Falha ao imprimir:', err.message);
-    res.status(502).json({ error: `falha ao imprimir: ${err.message}` });
-  }
+// Imprime uma página de teste no caminho informado — usada pelo botão
+// "Imprimir página de teste" das configurações do app, pra confirmar
+// que a rede encontra a impressora sem precisar fechar uma venda.
+app.post('/teste', async (req, res) => {
+  const { printerPath } = req.body ?? {};
+  if (!printerPath) return res.status(400).json({ error: 'printerPath é obrigatório' });
+  const buffer = buildPaginaTeste({ printerPath, dataHora: new Date() });
+  await enviarParaImpressora(res, printerPath, buffer, 'teste');
 });
 
 app.listen(PORT, () => {

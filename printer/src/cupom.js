@@ -137,3 +137,24 @@ export async function buildCupom({ empresa, itens, formaPagamento, total, cpf, l
   chunks.push(CMD.LINE_SPACING_DEFAULT, CMD.FEED_3, CMD.CUT);
   return Buffer.concat(chunks);
 }
+
+// Página de teste: confirma que a rede encontra a impressora, sem
+// depender de dados de empresa/comanda (usada pelo botão "Imprimir
+// página de teste" nas configurações do app).
+export function buildPaginaTeste({ printerPath, dataHora = new Date() } = {}) {
+  const dt = dataHora.toLocaleString('pt-BR', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const chunks = [CMD.INIT, CMD.FONT_B, CMD.LINE_SPACING_TIGHT, CMD.ALIGN_CENTER];
+  chunks.push(CMD.BOLD_ON, t('TESTE DE IMPRESSAO'), CMD.BOLD_OFF);
+  chunks.push(t('MarketMe'));
+  chunks.push(t('-'.repeat(COLS)));
+  if (printerPath) chunks.push(t(printerPath));
+  chunks.push(t(dt));
+  chunks.push(t('-'.repeat(COLS)));
+  chunks.push(t('Se voce esta lendo isto,'));
+  chunks.push(t('a impressora esta configurada.'));
+  chunks.push(CMD.LINE_SPACING_DEFAULT, CMD.FEED_3, CMD.CUT);
+  return Buffer.concat(chunks);
+}

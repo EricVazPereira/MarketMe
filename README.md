@@ -25,10 +25,13 @@ completado automaticamente. O banco de dados e a autenticação ficam no
 
 A impressão do cupom é feita por um **servidor separado** (pasta
 `printer/`), porque o tablet Android não enxerga caminhos de rede do
-Windows (`\\eric\cupom`) — só o PC consegue. Esse servidor roda nessa
-mesma máquina e escreve direto no spooler de impressão (WinSpool via
-FFI), sem depender do Server ZF. Se `printServer` não for configurado
-no app, a impressão simplesmente não acontece (recurso opcional).
+Windows (`\\eric\cupom`) — só um PC Windows consegue. Esse servidor
+roda na máquina que enxerga o compartilhamento e escreve direto no
+spooler de impressão (WinSpool via FFI), sem depender do Server ZF. O
+app deduz o endereço desse serviço a partir do próprio caminho digitado
+em "Impressora" (`\\HOST\compartilhamento` → `http://HOST:8127`) — não
+existe campo de endereço separado. Se "Impressora" ficar vazio, a
+impressão simplesmente não acontece (recurso opcional).
 
 ## Fluxo do PDV (como o app funciona)
 
@@ -93,18 +96,17 @@ PRINT_DRY_RUN=1 npm start    # desenvolvimento: grava .prn em printer/dry-run/
                               # em vez de imprimir (funciona em qualquer SO)
 ```
 
-Escuta na porta **8127** por padrão (`PRINT_PORT` no ambiente muda). No
-app, em Configurações, preencha:
+O app tem **um único campo de impressão**: "Impressora", com o
+caminho de rede do compartilhamento (`\\eric\cupom` ou
+`\\192.168.1.50\cupom`). O app extrai o host (`eric` /
+`192.168.1.50`) direto desse caminho e conversa com o serviço
+`printer/` que precisa estar rodando **nessa mesma máquina** (a que
+tem o compartilhamento), numa porta fixa (8127) que não aparece na
+configuração. Não existe campo separado de "servidor de impressão" —
+não usa porta, só o endereço de rede que você já digitou.
 
-- **Impressora**: o caminho/nome usado pelo Windows (`\\eric\cupom`)
-  — **deixe vazio para não imprimir**;
-- **Servidor de impressão** (opcional): endereço de rede de onde
-  `printer/` está rodando. Se a impressora estiver na **mesma máquina**
-  do Server ZF, deixe em branco — o app usa o mesmo host da API, porta
-  8127. Preencha só se `printer/` rodar em **outra máquina** (ex.:
-  impressora de rede, PC dedicado à impressão) — nesse caso, o
-  compartilhamento em "Impressora" também precisa ser algo que essa
-  outra máquina enxergue, não o Server ZF;
+- **Impressora**: caminho de rede (`\\eric\cupom`) — **deixe vazio
+  para não imprimir**;
 - **Logo da loja**: escolha uma imagem (até 512KB) — é convertida em
   bitmap e impressa centralizada no topo do cupom, acima do nome/
   endereço da empresa. Fica salva no tablet; "Remover logo" tira do
@@ -116,14 +118,15 @@ Se o cupom fechar mas não sair na impressora, o app mostra um aviso
 reconhece o caminho preenchido em Impressora. A venda **não é
 desfeita** nesse caso.
 
-Use o botão **"Testar impressora"** (em Configurações, logo abaixo do
-campo Impressora) para checar a conexão sem precisar fechar uma venda
-de verdade — ele chama `GET /health` no endereço deduzido e mostra se
-respondeu ou não. Erro **"Failed to fetch" / "não respondeu"** quase
-sempre significa que o `npm start` de `printer/` não está rodando
-nesse momento naquele PC — ele precisa ficar de pé o tempo todo (por
-exemplo, como tarefa agendada/serviço do Windows), não só durante o
-teste.
+Use o botão **"Imprimir página de teste"** (em Configurações, logo
+abaixo do campo Impressora) pra confirmar de verdade que a rede
+encontra a impressora — ele manda imprimir uma página de teste real
+no caminho digitado (`POST /teste`), sem precisar fechar uma venda.
+Erro **"Failed to fetch" / "não respondeu"** quase sempre significa
+que o `npm start` de `printer/` não está rodando nesse momento na
+máquina do compartilhamento — ele precisa ficar de pé o tempo todo
+(por exemplo, como tarefa agendada/serviço do Windows), não só
+durante o teste.
 
 ### Como funciona
 

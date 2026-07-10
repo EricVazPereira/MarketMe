@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { da, t, padRight, padLeft, center, moneyBR, qrEscPos, COLS } from '../src/escpos.js';
-import { buildCupom, itemLine, headerLine } from '../src/cupom.js';
+import { buildCupom, buildPaginaTeste, itemLine, headerLine } from '../src/cupom.js';
 
 test('da() remove acentos e diacríticos', () => {
   assert.equal(da('café com açúcar e pão'), 'cafe com acucar e pao');
@@ -105,4 +105,20 @@ test('logo inválida não derruba o cupom — imprime sem ela', async () => {
   });
   assert.ok(Buffer.isBuffer(buf));
   assert.ok(buf.toString('latin1').includes('NEWPOINTER'));
+});
+
+test('buildPaginaTeste monta uma página de teste com o caminho da impressora', () => {
+  const buf = buildPaginaTeste({ printerPath: '\\\\eric\\cupom' });
+  assert.ok(Buffer.isBuffer(buf));
+  assert.ok(buf.includes(Buffer.from([0x1b, 0x40]))); // INIT
+  assert.ok(buf.includes(Buffer.from([0x1d, 0x56, 0x42, 0x03]))); // CUT
+  const texto = buf.toString('latin1');
+  assert.ok(texto.includes('TESTE DE IMPRESSAO'));
+  assert.ok(texto.includes('\\\\eric\\cupom'));
+});
+
+test('buildPaginaTeste funciona sem printerPath', () => {
+  const buf = buildPaginaTeste();
+  assert.ok(Buffer.isBuffer(buf));
+  assert.ok(buf.toString('latin1').includes('TESTE DE IMPRESSAO'));
 });
