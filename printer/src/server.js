@@ -62,9 +62,9 @@ app.post('/imprimir', async (req, res) => {
 // "Imprimir página de teste" das configurações do app, pra confirmar
 // que a rede encontra a impressora sem precisar fechar uma venda.
 app.post('/teste', async (req, res) => {
-  const { printerPath } = req.body ?? {};
+  const { printerPath, logoBase64 } = req.body ?? {};
   if (!printerPath) return res.status(400).json({ error: 'printerPath é obrigatório' });
-  const buffer = buildPaginaTeste({ printerPath, dataHora: new Date() });
+  const buffer = await buildPaginaTeste({ printerPath, logoBase64, dataHora: new Date() });
   await enviarParaImpressora(res, printerPath, buffer, 'teste');
 });
 

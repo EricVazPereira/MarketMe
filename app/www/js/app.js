@@ -459,7 +459,7 @@
         const res = await fetch(`${base}/teste`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ printerPath: cfg.impressora }),
+          body: JSON.stringify({ printerPath: cfg.impressora, logoBase64: cfg.logo || undefined }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `respondeu ${res.status}`);

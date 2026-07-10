@@ -140,13 +140,23 @@ export async function buildCupom({ empresa, itens, formaPagamento, total, cpf, l
 
 // Página de teste: confirma que a rede encontra a impressora, sem
 // depender de dados de empresa/comanda (usada pelo botão "Imprimir
-// página de teste" nas configurações do app).
-export function buildPaginaTeste({ printerPath, dataHora = new Date() } = {}) {
+// página de teste" nas configurações do app). Inclui a logo, se
+// configurada, pra dar pra validar o upload sem precisar fechar uma
+// venda de verdade.
+export async function buildPaginaTeste({ printerPath, logoBase64, dataHora = new Date() } = {}) {
   const dt = dataHora.toLocaleString('pt-BR', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit',
   });
   const chunks = [CMD.INIT, CMD.FONT_B, CMD.LINE_SPACING_TIGHT, CMD.ALIGN_CENTER];
+  if (logoBase64) {
+    try {
+      chunks.push(await imageToGSv0(logoBase64));
+      chunks.push(t(''));
+    } catch (err) {
+      console.error('Falha ao converter a logo, imprimindo sem ela:', err.message);
+    }
+  }
   chunks.push(CMD.BOLD_ON, t('TESTE DE IMPRESSAO'), CMD.BOLD_OFF);
   chunks.push(t('MarketMe'));
   chunks.push(t('-'.repeat(COLS)));

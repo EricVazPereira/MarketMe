@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Jimp } from 'jimp';
 import { da, t, padRight, padLeft, center, moneyBR, qrEscPos, COLS } from '../src/escpos.js';
 import { buildCupom, buildPaginaTeste, itemLine, headerLine } from '../src/cupom.js';
 
@@ -107,8 +108,8 @@ test('logo inválida não derruba o cupom — imprime sem ela', async () => {
   assert.ok(buf.toString('latin1').includes('NEWPOINTER'));
 });
 
-test('buildPaginaTeste monta uma página de teste com o caminho da impressora', () => {
-  const buf = buildPaginaTeste({ printerPath: '\\\\eric\\cupom' });
+test('buildPaginaTeste monta uma página de teste com o caminho da impressora', async () => {
+  const buf = await buildPaginaTeste({ printerPath: '\\\\eric\\cupom' });
   assert.ok(Buffer.isBuffer(buf));
   assert.ok(buf.includes(Buffer.from([0x1b, 0x40]))); // INIT
   assert.ok(buf.includes(Buffer.from([0x1d, 0x56, 0x42, 0x03]))); // CUT
@@ -117,8 +118,26 @@ test('buildPaginaTeste monta uma página de teste com o caminho da impressora', 
   assert.ok(texto.includes('\\\\eric\\cupom'));
 });
 
-test('buildPaginaTeste funciona sem printerPath', () => {
-  const buf = buildPaginaTeste();
+test('buildPaginaTeste funciona sem printerPath', async () => {
+  const buf = await buildPaginaTeste();
+  assert.ok(Buffer.isBuffer(buf));
+  assert.ok(buf.toString('latin1').includes('TESTE DE IMPRESSAO'));
+});
+
+test('buildPaginaTeste inclui a logo quando configurada', async () => {
+  const semLogo = await buildPaginaTeste({ printerPath: '\\\\eric\\cupom' });
+  assert.ok(!semLogo.includes(Buffer.from([0x1d, 0x76, 0x30]))); // sem GS v 0
+
+  const png = await new Jimp({ width: 8, height: 8, color: 0x000000ff }).getBuffer('image/png');
+  const comLogo = await buildPaginaTeste({
+    printerPath: '\\\\eric\\cupom',
+    logoBase64: `data:image/png;base64,${png.toString('base64')}`,
+  });
+  assert.ok(comLogo.includes(Buffer.from([0x1d, 0x76, 0x30]))); // com GS v 0
+});
+
+test('buildPaginaTeste não quebra com logo inválida', async () => {
+  const buf = await buildPaginaTeste({ printerPath: '\\\\eric\\cupom', logoBase64: 'nao-e-imagem' });
   assert.ok(Buffer.isBuffer(buf));
   assert.ok(buf.toString('latin1').includes('TESTE DE IMPRESSAO'));
 });
