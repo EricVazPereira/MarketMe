@@ -78,13 +78,28 @@ cupom` que você usaria no Explorer). Formato do cupom espelha o do
 Caixa Livre: 64 colunas, Fonte B, ESC/POS puro, impressão RAW via
 WinSpool (sem passar por driver/PowerShell a cada cupom).
 
-**Cupom não-fiscal por enquanto** — sem QR code nem protocolo de
-autorização NFC-e, porque o MarketMe ainda não emite nota fiscal
-eletrônica (isso depende de integração com SAT/SEFAZ, fase futura).
-Imprimir uma seção "CUPOM FISCAL ELETRONICO" sem uma emissão fiscal de
-verdade por trás seria enganoso, então o cabeçalho diz **"CUPOM NAO
-FISCAL — COMPROVANTE DE COMPRA"**. A função `qrEscPos()` já existe em
-`printer/src/escpos.js`, pronta para quando a emissão fiscal entrar.
+**Cupom fiscal (NFC-e)** — quando `buildCupom()` recebe o parâmetro
+`fiscal` (`{ numeroNfce, protocolo, qrCodeConteudo }`, vindos da
+emissão real feita no fechamento da venda), o cupom sai com "CUPOM
+FISCAL ELETRONICO - NFC-e", um cabeçalho com a **logo à esquerda e os
+dados da empresa à direita**, e um rodapé com o **QR Code à esquerda e
+NFC-e/protocolo/data à direita** — como ESC/POS puro não posiciona
+texto ao lado de uma imagem nativamente, esses dois blocos são
+montados como bitmap único (`printer/src/image.js`,
+`composeHeader`/`composeQrFooter`, via Jimp + `qrcode`) e impressos
+como comando `GS v 0`. **Sem `fiscal`** (ainda não integrado ao app —
+ver abaixo), o cupom continua saindo como antes: **"CUPOM NAO FISCAL —
+COMPROVANTE DE COMPRA"**, sem QR/protocolo, porque imprimir uma seção
+fiscal sem dados reais por trás seria enganoso.
+
+> **Ainda não plugado no app**: o app (`app/www/js/app.js`) hoje não
+> manda `fiscal` pro servidor de impressão — falta a integração com o
+> sistema que devolve os dados da emissão (número da NFC-e, protocolo
+> de autorização, conteúdo do QR) no fechamento da venda, e também com
+> o **QLUB** (formas de pagamento — vai devolver os dados da transação,
+> como NSU/autorização de cartão, que também precisam ir pro cupom).
+> `printer/` já está pronto para receber `fiscal` assim que o app
+> passar a mandar.
 
 ### Rodando o servidor de impressão
 

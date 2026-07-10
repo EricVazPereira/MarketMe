@@ -1,14 +1,13 @@
 // Monta o buffer ESC/POS do cupom (64 colunas, Fonte B), no mesmo
 // layout usado pelo Caixa Livre.
 //
-// Cupom NÃO-FISCAL: o MarketMe ainda não emite NFC-e (isso é fase
-// futura — precisa de autorização fiscal via SAT/SEFAZ). Por isso o
-// cabeçalho diz "CUPOM NAO FISCAL" em vez de "CUPOM FISCAL ELETRONICO
-// - NFC-e", e não há QR code/protocolo de autorização — imprimir isso
-// sem uma emissão fiscal real por trás seria enganoso. A função
-// qrEscPos já está pronta em escpos.js para quando essa fase chegar.
+// Cupom fiscal (NFC-e) só é impresso quando `fiscal` é passado com os
+// dados reais da emissão (número da NFC-e, protocolo de autorização e
+// o conteúdo do QR Code, que vêm do XML gerado pelo sistema fiscal no
+// fechamento da venda). Sem isso, o cupom sai como "NAO FISCAL" — não
+// dá pra fingir uma emissão fiscal sem os dados reais por trás.
 import { CMD, COLS, t, padRight, padLeft, center, moneyBR } from './escpos.js';
-import { imageToGSv0 } from './image.js';
+import { imageToGSv0, composeHeader, composeQrFooter } from './image.js';
 
 // larguras fixas da tabela de itens (soma = 64)
 const W = { n: 3, sep: 1, codigo: 7, descricao: 29, qt: 8, vlUn: 8, total: 8 };
@@ -66,39 +65,74 @@ function formatQtd(qty, unidade) {
  * @param {string} [p.cpf]
  * @param {string|Buffer} [p.logoBase64] - logo da loja (data URL ou base64 puro)
  * @param {Date}   [p.dataHora]
+ * @param {object} [p.fiscal] - dados reais da emissão NFC-e (vindos do
+ *   XML gerado no fechamento da venda). Sem isso, o cupom sai NAO
+ *   FISCAL — nunca inventamos QR/protocolo.
+ * @param {string} [p.fiscal.numeroNfce]
+ * @param {string} [p.fiscal.protocolo] - protocolo de autorização
+ * @param {string} [p.fiscal.qrCodeConteudo] - conteúdo/URL do QR Code da NFC-e
  */
-export async function buildCupom({ empresa, itens, formaPagamento, total, cpf, logoBase64, dataHora = new Date() }) {
+export async function buildCupom({
+  empresa, itens, formaPagamento, total, cpf, logoBase64, dataHora = new Date(), fiscal,
+}) {
   const chunks = [CMD.INIT, CMD.FONT_B, CMD.LINE_SPACING_TIGHT];
+  const nome = empresa?.['Nome Fantasia'] || empresa?.['Razao Social'] || '';
+  const endereco = [empresa?.Rua, empresa?.Numero].filter(Boolean).join(' ');
+  const bairroCidade = [empresa?.Bairro, [empresa?.Cidade, empresa?.UF].filter(Boolean).join('/')]
+    .filter(Boolean).join(' - ');
+  const dt = dataHora.toLocaleString('pt-BR', {
+    day: '2-digit', month: '2-digit', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
 
-  chunks.push(CMD.ALIGN_CENTER);
-
-  // logo (opcional): alinhamento centralizado também vale pra imagem
-  // raster na maioria das impressoras ESC/POS. Falha ao converter não
-  // derruba o cupom inteiro — só imprime sem a logo.
-  if (logoBase64) {
+  // Cabeçalho: no cupom fiscal com logo, monta logo à esquerda + dados
+  // da empresa à direita como uma única imagem (ESC/POS não posiciona
+  // texto ao lado de bitmap nativamente). Sem dados fiscais, ou sem
+  // logo, mantém o cabeçalho de texto simples e centralizado de sempre.
+  let cabecalhoComposto = null;
+  if (fiscal && logoBase64) {
+    const linhas = [{ text: nome, size: 'title' }];
+    if (endereco) linhas.push({ text: endereco, size: 'small' });
+    if (bairroCidade) linhas.push({ text: bairroCidade, size: 'small' });
+    if (empresa?.CNPJ) linhas.push({ text: `CNPJ: ${formatCNPJ(empresa.CNPJ)}`, size: 'small' });
+    if (empresa?.Cep) linhas.push({ text: `CEP.: ${formatCEP(empresa.Cep)}`, size: 'small' });
+    if (empresa?.Telefone) linhas.push({ text: `TEL.: ${empresa.Telefone}`, size: 'small' });
+    if (empresa?.IE) linhas.push({ text: `IE..: ${empresa.IE}`, size: 'small' });
     try {
-      chunks.push(await imageToGSv0(logoBase64));
-      chunks.push(t(''));
+      cabecalhoComposto = await composeHeader({ logoBase64, lines: linhas });
     } catch (err) {
-      console.error('Falha ao converter a logo, imprimindo sem ela:', err.message);
+      console.error('Falha ao montar cabecalho com logo, usando texto simples:', err.message);
     }
   }
 
-  // cabeçalho da empresa
-  chunks.push(CMD.BOLD_ON);
-  chunks.push(t(empresa?.['Nome Fantasia'] || empresa?.['Razao Social'] || ''));
-  chunks.push(CMD.BOLD_OFF);
-  const endereco = [empresa?.Rua, empresa?.Numero].filter(Boolean).join(' ');
-  if (endereco) chunks.push(t(endereco));
-  const bairroCidade = [empresa?.Bairro, [empresa?.Cidade, empresa?.UF].filter(Boolean).join('/')]
-    .filter(Boolean).join(' - ');
-  if (bairroCidade) chunks.push(t(bairroCidade));
-  if (empresa?.CNPJ) chunks.push(t(`CNPJ: ${formatCNPJ(empresa.CNPJ)}`));
-  if (empresa?.Cep) chunks.push(t(`CEP.: ${formatCEP(empresa.Cep)}`));
-  if (empresa?.Telefone) chunks.push(t(`TEL.: ${empresa.Telefone}`));
-  if (empresa?.IE) chunks.push(t(`IE..: ${empresa.IE}`));
+  chunks.push(CMD.ALIGN_CENTER);
+  if (cabecalhoComposto) {
+    chunks.push(cabecalhoComposto, t(''));
+  } else {
+    // logo centralizada (opcional): falha ao converter não derruba o
+    // cupom inteiro — só imprime sem a logo.
+    if (logoBase64) {
+      try {
+        chunks.push(await imageToGSv0(logoBase64));
+        chunks.push(t(''));
+      } catch (err) {
+        console.error('Falha ao converter a logo, imprimindo sem ela:', err.message);
+      }
+    }
+    chunks.push(CMD.BOLD_ON, t(nome), CMD.BOLD_OFF);
+    if (endereco) chunks.push(t(endereco));
+    if (bairroCidade) chunks.push(t(bairroCidade));
+    if (empresa?.CNPJ) chunks.push(t(`CNPJ: ${formatCNPJ(empresa.CNPJ)}`));
+    if (empresa?.Cep) chunks.push(t(`CEP.: ${formatCEP(empresa.Cep)}`));
+    if (empresa?.Telefone) chunks.push(t(`TEL.: ${empresa.Telefone}`));
+    if (empresa?.IE) chunks.push(t(`IE..: ${empresa.IE}`));
+  }
   chunks.push(t(''));
-  chunks.push(CMD.BOLD_ON, t('CUPOM NAO FISCAL'), t('COMPROVANTE DE COMPRA'), CMD.BOLD_OFF);
+  if (fiscal) {
+    chunks.push(CMD.BOLD_ON, t('CUPOM FISCAL ELETRONICO - NFC-e'), CMD.BOLD_OFF);
+  } else {
+    chunks.push(CMD.BOLD_ON, t('CUPOM NAO FISCAL'), t('COMPROVANTE DE COMPRA'), CMD.BOLD_OFF);
+  }
   chunks.push(t(''));
 
   // itens
@@ -124,15 +158,36 @@ export async function buildCupom({ empresa, itens, formaPagamento, total, cpf, l
   chunks.push(t(''));
   chunks.push(t(padRight('FORMA DE PAGAMENTO', COLS - 10) + padLeft('VALOR PAGO', 10)));
   chunks.push(t(padRight(formaPagamento || '-', COLS - 10) + padLeft(moneyBR(total), 10)));
-  if (cpf) chunks.push(t(''), CMD.ALIGN_CENTER, t(`CPF: ${formatCPF(cpf)}`), CMD.ALIGN_LEFT);
+  if (cpf) {
+    chunks.push(t(''), CMD.ALIGN_CENTER, t(`CPF: ${formatCPF(cpf)}`), CMD.ALIGN_LEFT);
+  } else if (fiscal) {
+    chunks.push(t(''), CMD.ALIGN_CENTER, t('CONSUMIDOR NAO IDENTIFICADO'), CMD.ALIGN_LEFT);
+  }
+
+  // rodapé fiscal: QR Code à esquerda, NFC-e/protocolo/data à direita,
+  // como uma única imagem (mesmo motivo do cabeçalho). Sem QR real,
+  // não imprime nada aqui — cai no rodapé simples de data/hora abaixo.
+  let rodapeComposto = null;
+  if (fiscal?.qrCodeConteudo) {
+    const linhas = [];
+    if (fiscal.numeroNfce) linhas.push({ text: `NFC-e: ${fiscal.numeroNfce}`, size: 'body' });
+    linhas.push({ text: 'Protocolo de autorizacao:', size: 'small' });
+    if (fiscal.protocolo) linhas.push({ text: String(fiscal.protocolo), size: 'small' });
+    linhas.push({ text: dt, size: 'small' });
+    try {
+      rodapeComposto = await composeQrFooter({ qrContent: fiscal.qrCodeConteudo, lines: linhas });
+    } catch (err) {
+      console.error('Falha ao montar QR fiscal, cupom sai sem ele:', err.message);
+    }
+  }
 
   chunks.push(t(''));
   chunks.push(CMD.ALIGN_CENTER);
-  const dt = dataHora.toLocaleString('pt-BR', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-  });
-  chunks.push(t(dt));
+  if (rodapeComposto) {
+    chunks.push(rodapeComposto);
+  } else {
+    chunks.push(t(dt));
+  }
 
   chunks.push(CMD.LINE_SPACING_DEFAULT, CMD.FEED_3, CMD.CUT);
   return Buffer.concat(chunks);

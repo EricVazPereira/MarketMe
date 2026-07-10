@@ -108,6 +108,80 @@ test('logo inválida não derruba o cupom — imprime sem ela', async () => {
   assert.ok(buf.toString('latin1').includes('NEWPOINTER'));
 });
 
+async function logoTeste() {
+  const png = await new Jimp({ width: 40, height: 40, color: 0x000000ff }).getBuffer('image/png');
+  return `data:image/png;base64,${png.toString('base64')}`;
+}
+
+// Cabeçalho e rodapé fiscais (lado a lado) são renderizados como
+// bitmap (GS v 0) — o texto vira pixel, não sobra como bytes ASCII no
+// buffer. Então a única forma confiável de verificar que cada bloco
+// foi montado é contar quantos comandos GS v 0 existem no cupom.
+function contarGSv0(buf) {
+  const comando = Buffer.from([0x1d, 0x76, 0x30]);
+  let count = 0;
+  let idx = 0;
+  while ((idx = buf.indexOf(comando, idx)) !== -1) { count++; idx += 1; }
+  return count;
+}
+
+const FISCAL = {
+  numeroNfce: '001242',
+  protocolo: '135264431671342',
+  qrCodeConteudo: 'https://www.homologacao.nfce.fazenda.sp.gov.br/qrcode?chNFe=exemplo',
+};
+
+test('sem `fiscal`, cupom continua NAO FISCAL (sem regressão)', async () => {
+  const buf = await buildCupom({ empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98 });
+  const texto = buf.toString('latin1');
+  assert.ok(texto.includes('CUPOM NAO FISCAL'));
+  assert.ok(!texto.includes('NFC-e'));
+  assert.ok(!texto.includes('CONSUMIDOR NAO IDENTIFICADO'));
+});
+
+test('com `fiscal` + logo, monta cabeçalho e rodapé compostos (lado a lado)', async () => {
+  const buf = await buildCupom({
+    empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
+    logoBase64: await logoTeste(), fiscal: FISCAL,
+  });
+  const texto = buf.toString('latin1');
+  assert.ok(texto.includes('CUPOM FISCAL ELETRONICO - NFC-e'));
+  assert.ok(!texto.includes('CUPOM NAO FISCAL'));
+  assert.ok(texto.includes('CONSUMIDOR NAO IDENTIFICADO')); // sem CPF informado
+  // dois blocos GS v 0 compostos: cabeçalho (logo+empresa) e rodapé (QR+dados)
+  assert.equal(contarGSv0(buf), 2);
+});
+
+test('com `fiscal` + CPF, mostra o CPF em vez de "consumidor não identificado"', async () => {
+  const buf = await buildCupom({
+    empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
+    logoBase64: await logoTeste(), fiscal: FISCAL, cpf: '12345678900',
+  });
+  const texto = buf.toString('latin1');
+  assert.ok(texto.includes('123.456.789-00'));
+  assert.ok(!texto.includes('CONSUMIDOR NAO IDENTIFICADO'));
+});
+
+test('com `fiscal` mas sem logo, cai no cabeçalho de texto simples (ainda fiscal)', async () => {
+  const buf = await buildCupom({
+    empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98, fiscal: FISCAL,
+  });
+  const texto = buf.toString('latin1');
+  assert.ok(texto.includes('CUPOM FISCAL ELETRONICO - NFC-e'));
+  assert.ok(texto.includes('NEWPOINTER')); // cabeçalho de texto simples, sem logo
+  assert.equal(contarGSv0(buf), 1); // só o rodapé com QR (sem logo não há cabeçalho composto)
+});
+
+test('com `fiscal` mas sem qrCodeConteudo, não imprime rodapé de QR', async () => {
+  const buf = await buildCupom({
+    empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
+    logoBase64: await logoTeste(), fiscal: { numeroNfce: '001242' },
+  });
+  const texto = buf.toString('latin1');
+  assert.ok(texto.includes('CUPOM FISCAL ELETRONICO - NFC-e'));
+  assert.equal(contarGSv0(buf), 1); // só o cabeçalho (logo+empresa); sem QR não monta o rodapé
+});
+
 test('buildPaginaTeste monta uma página de teste com o caminho da impressora', async () => {
   const buf = await buildPaginaTeste({ printerPath: '\\\\eric\\cupom' });
   assert.ok(Buffer.isBuffer(buf));

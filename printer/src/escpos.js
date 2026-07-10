@@ -17,6 +17,11 @@ export const CMD = {
 
 export const COLS = 64;
 
+// Largura da área imprimível em dots, pra imagens/bitmaps ocuparem a
+// largura toda do papel — 576 é o padrão de impressoras térmicas de
+// 80mm (o mesmo papel que comporta as 64 colunas da Fonte B).
+export const PAPER_WIDTH_DOTS = 576;
+
 // Remove acentos/diacríticos (a impressora só entende Latin-1 puro).
 // U+0300–U+036F = bloco Unicode de "Combining Diacritical Marks", que é
 // o que sobra de cada letra acentuada depois do normalize('NFD').
