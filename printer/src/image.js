@@ -5,7 +5,7 @@
 // tudo em um canvas e imprimimos como um bitmap só. Usa Jimp (puro JS,
 // sem binário nativo) para montar/binarizar, e `qrcode` para gerar o
 // QR Code fiscal.
-import { Jimp, loadFont, measureTextHeight } from 'jimp';
+import { Jimp, loadFont, measureText, measureTextHeight } from 'jimp';
 import QRCode from 'qrcode';
 import { PAPER_WIDTH_DOTS } from './escpos.js';
 
@@ -102,6 +102,10 @@ async function getFonts() {
 // Escreve linhas de texto verticalmente a partir de (x, y), cada uma
 // com sua fonte ('title' | 'medium' | 'body' | 'small'), sempre
 // alinhadas à esquerda (print() não centraliza — só respeita x/maxWidth).
+// `bold: true` numa linha imprime duas vezes com 1px de deslocamento
+// horizontal — as fontes bitmap bundladas não têm variante negrito,
+// então isso engrossa o traço (mesmo truque usado em renderização de
+// texto bitmap em geral).
 // Usa measureTextHeight (em vez de font.common.lineHeight) porque
 // linhas longas quebram em várias linhas dentro de maxWidth, e um
 // avanço fixo por linha causaria sobreposição com a linha seguinte.
@@ -111,6 +115,7 @@ async function drawLines(img, lines, x, y, maxWidth) {
   for (const line of lines) {
     const font = f[line.size || 'body'];
     img.print({ font, x, y: cursorY, text: line.text, maxWidth });
+    if (line.bold) img.print({ font, x: x + 1, y: cursorY, text: line.text, maxWidth });
     cursorY += measureTextHeight(font, line.text, maxWidth);
   }
   return cursorY - y;
@@ -194,15 +199,27 @@ export async function composeQrFooter({ qrContent, lines, width = PAPER_WIDTH_DO
   const pad = 8;
   const qrSize = 160;
   const textX = qrSize + pad * 2;
-  const textMaxWidth = width - textX - pad;
+  const textMaxWidthDisponivel = width - textX - pad;
 
   const qrPng = await QRCode.toBuffer(String(qrContent), { type: 'png', margin: 1, width: qrSize });
   const qrImg = await Jimp.read(qrPng);
 
+  // Largura do bloco = só o necessário pro conteúdo (QR + texto), não
+  // a largura toda do papel — o ALIGN_CENTER já ativo no cupom quando
+  // isso é impresso centraliza automaticamente um bitmap mais estreito
+  // que o papel, então o bloco sai centralizado sem cálculo manual.
+  const f = await getFonts();
+  let maxLineWidth = 0;
+  for (const line of lines || []) {
+    maxLineWidth = Math.max(maxLineWidth, measureText(f[line.size || 'body'], line.text));
+  }
+  const textMaxWidth = Math.min(Math.max(maxLineWidth, 1), textMaxWidthDisponivel);
+  const blockWidth = Math.min(textX + textMaxWidth + pad, width);
+
   const textHeight = await alturaLinhas(lines, textMaxWidth);
 
   const height = Math.max(qrSize, textHeight) + pad * 2;
-  const canvas = new Jimp({ width, height, color: 0xffffffff });
+  const canvas = new Jimp({ width: blockWidth, height, color: 0xffffffff });
 
   canvas.composite(qrImg, pad, Math.round((height - qrSize) / 2));
   if (lines?.length) await drawLines(canvas, lines, textX, Math.round((height - textHeight) / 2), textMaxWidth);

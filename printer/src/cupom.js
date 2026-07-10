@@ -91,13 +91,13 @@ export async function buildCupom({
   // logo, mantém o cabeçalho de texto simples e centralizado de sempre.
   let cabecalhoComposto = null;
   if (fiscal && logoBase64) {
-    const linhas = [{ text: nome, size: 'title' }];
-    if (endereco) linhas.push({ text: endereco, size: 'small' });
+    const linhas = [{ text: nome, size: 'title', bold: true }];
+    if (endereco) linhas.push({ text: endereco, size: 'medium' });
     if (bairroCidade) linhas.push({ text: bairroCidade, size: 'small' });
-    if (empresa?.CNPJ) linhas.push({ text: `CNPJ: ${formatCNPJ(empresa.CNPJ)}`, size: 'small' });
-    if (empresa?.Cep) linhas.push({ text: `CEP.: ${formatCEP(empresa.Cep)}`, size: 'small' });
+    if (empresa?.CNPJ) linhas.push({ text: `CNPJ: ${formatCNPJ(empresa.CNPJ)}`, size: 'medium' });
+    if (empresa?.Cep) linhas.push({ text: `CEP.: ${formatCEP(empresa.Cep)}`, size: 'medium' });
     if (empresa?.Telefone) linhas.push({ text: `TEL.: ${empresa.Telefone}`, size: 'small' });
-    if (empresa?.IE) linhas.push({ text: `IE..: ${empresa.IE}`, size: 'small' });
+    if (empresa?.IE) linhas.push({ text: `IE..: ${empresa.IE}`, size: 'medium' });
     try {
       cabecalhoComposto = await composeHeader({ logoBase64, lines: linhas });
     } catch (err) {
