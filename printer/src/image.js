@@ -5,7 +5,7 @@
 // tudo em um canvas e imprimimos como um bitmap só. Usa Jimp (puro JS,
 // sem binário nativo) para montar/binarizar, e `qrcode` para gerar o
 // QR Code fiscal.
-import { Jimp, loadFont } from 'jimp';
+import { Jimp, loadFont, measureTextHeight } from 'jimp';
 import QRCode from 'qrcode';
 import { PAPER_WIDTH_DOTS } from './escpos.js';
 
@@ -70,12 +70,28 @@ function fitBox(w, h, maxW, maxH) {
   return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
 }
 
+// Converte pra preto/branco puro (sem tons de cinza) num threshold
+// próprio — usado na logo antes de compor com o texto, pra que o
+// threshold "duro" do texto (200) não apague tons claros da logo:
+// depois de binarizada aqui, cada pixel já é 0 ou 255, então qualquer
+// threshold posterior preserva o resultado.
+function binarize(img, threshold) {
+  img.greyscale();
+  const { data } = img.bitmap;
+  for (let i = 0; i < data.length; i += 4) {
+    const v = data[i] < threshold ? 0 : 255;
+    data[i] = data[i + 1] = data[i + 2] = v;
+  }
+  return img;
+}
+
 let fonts = null;
 async function getFonts() {
   if (!fonts) {
-    const { SANS_16_BLACK, SANS_12_BLACK, SANS_10_BLACK } = await import('jimp/fonts');
+    const { SANS_32_BLACK, SANS_16_BLACK, SANS_12_BLACK, SANS_10_BLACK } = await import('jimp/fonts');
     fonts = {
-      title: await loadFont(SANS_16_BLACK),
+      title: await loadFont(SANS_32_BLACK),
+      medium: await loadFont(SANS_16_BLACK),
       body: await loadFont(SANS_12_BLACK),
       small: await loadFont(SANS_10_BLACK),
     };
@@ -84,17 +100,31 @@ async function getFonts() {
 }
 
 // Escreve linhas de texto verticalmente a partir de (x, y), cada uma
-// com sua fonte ('title' | 'body' | 'small'). Retorna a altura total
-// ocupada.
+// com sua fonte ('title' | 'medium' | 'body' | 'small'), sempre
+// alinhadas à esquerda (print() não centraliza — só respeita x/maxWidth).
+// Usa measureTextHeight (em vez de font.common.lineHeight) porque
+// linhas longas quebram em várias linhas dentro de maxWidth, e um
+// avanço fixo por linha causaria sobreposição com a linha seguinte.
 async function drawLines(img, lines, x, y, maxWidth) {
   const f = await getFonts();
   let cursorY = y;
   for (const line of lines) {
     const font = f[line.size || 'body'];
-    img.print({ font, x, y: cursorY, text: line.text, maxWidth: maxWidth });
-    cursorY += font.common.lineHeight;
+    img.print({ font, x, y: cursorY, text: line.text, maxWidth });
+    cursorY += measureTextHeight(font, line.text, maxWidth);
   }
   return cursorY - y;
+}
+
+// Mesma lógica de altura usada em drawLines, exposta pra quem precisa
+// dimensionar o canvas ANTES de desenhar (composeHeader/composeQrFooter).
+async function alturaLinhas(lines, maxWidth) {
+  const f = await getFonts();
+  let total = 0;
+  for (const line of lines || []) {
+    total += measureTextHeight(f[line.size || 'body'], line.text, maxWidth);
+  }
+  return total;
 }
 
 /**
@@ -109,23 +139,35 @@ export async function composeHeader({ logoBase64, lines, width = PAPER_WIDTH_DOT
   if (!lines?.length && !logoBase64) return null;
 
   const pad = 8;
-  const logoColW = logoBase64 ? 130 : 0;
-  const textX = logoColW + (logoBase64 ? pad : 0) + pad;
-  const textMaxWidth = width - textX - pad;
 
-  // altura do bloco de texto = soma do lineHeight de cada linha (é
-  // exatamente o espaçamento que drawLines() usa entre linhas)
-  const f = await getFonts();
-  const estHeight = (lines || []).reduce(
-    (acc, l) => acc + f[l.size || 'body'].common.lineHeight, pad,
-  );
-
+  // Carrega a logo isoladamente, com sua própria margem de erro: uma
+  // logo que falha ao decodificar não deve derrubar o cabeçalho
+  // inteiro (cai pro cabeçalho só de texto, ainda à esquerda — nunca
+  // volta pro layout antigo centralizado).
   let logoImg = null;
-  let logoH = 0;
+  let logoColW = 0;
   if (logoBase64) {
-    logoImg = await Jimp.read(toBuffer(logoBase64));
+    try {
+      logoImg = await Jimp.read(toBuffer(logoBase64));
+      logoColW = 130;
+    } catch (err) {
+      console.error('Logo inválida no cabeçalho, montando só com texto:', err.message);
+    }
+  }
+
+  const textX = logoColW + (logoColW ? pad : 0) + pad;
+  const textMaxWidth = width - textX - pad;
+  const estHeight = pad + await alturaLinhas(lines, textMaxWidth);
+
+  let logoH = 0;
+  if (logoImg) {
     const fitted = fitBox(logoImg.bitmap.width, logoImg.bitmap.height, logoColW, Math.max(estHeight, 80));
     logoImg.resize({ w: fitted.w, h: fitted.h });
+    // binariza a logo no threshold de foto/logo (mais permissivo com
+    // tons médios) ANTES de compor — assim tons claros da logo não
+    // somem quando o canvas inteiro é rebinarizado no threshold do
+    // texto (mais agressivo, ajustado pra traços finos de fonte).
+    binarize(logoImg, 150);
     logoH = fitted.h;
   }
 
@@ -157,10 +199,7 @@ export async function composeQrFooter({ qrContent, lines, width = PAPER_WIDTH_DO
   const qrPng = await QRCode.toBuffer(String(qrContent), { type: 'png', margin: 1, width: qrSize });
   const qrImg = await Jimp.read(qrPng);
 
-  const f = await getFonts();
-  const textHeight = (lines || []).reduce(
-    (acc, l) => acc + f[l.size || 'body'].common.lineHeight, 0,
-  );
+  const textHeight = await alturaLinhas(lines, textMaxWidth);
 
   const height = Math.max(qrSize, textHeight) + pad * 2;
   const canvas = new Jimp({ width, height, color: 0xffffffff });

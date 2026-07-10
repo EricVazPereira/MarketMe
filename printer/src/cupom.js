@@ -170,10 +170,13 @@ export async function buildCupom({
   let rodapeComposto = null;
   if (fiscal?.qrCodeConteudo) {
     const linhas = [];
-    if (fiscal.numeroNfce) linhas.push({ text: `NFC-e: ${fiscal.numeroNfce}`, size: 'body' });
-    linhas.push({ text: 'Protocolo de autorizacao:', size: 'small' });
-    if (fiscal.protocolo) linhas.push({ text: String(fiscal.protocolo), size: 'small' });
-    linhas.push({ text: dt, size: 'small' });
+    // NFC-e em destaque (título, o maior tamanho que ainda cabe na
+    // coluna sem quebrar linha); os demais dados, dobrados em relação
+    // ao rodapé original.
+    if (fiscal.numeroNfce) linhas.push({ text: `NFC-e: ${fiscal.numeroNfce}`, size: 'title' });
+    linhas.push({ text: 'Protocolo de autorizacao:', size: 'medium' });
+    if (fiscal.protocolo) linhas.push({ text: String(fiscal.protocolo), size: 'medium' });
+    linhas.push({ text: dt, size: 'medium' });
     try {
       rodapeComposto = await composeQrFooter({ qrContent: fiscal.qrCodeConteudo, lines: linhas });
     } catch (err) {
