@@ -3,6 +3,13 @@
 // PowerShell a cada impressão. Só funciona no Windows — em qualquer
 // outro SO, rawPrint() lança um erro claro (o servidor pode rodar em
 // modo dry-run para desenvolvimento/teste, ver server.js).
+// koffi é CommonJS; import dinâmico compatível com ESM
+import { createRequire } from 'node:module';
+const requireCjs = createRequire(import.meta.url);
+function require_koffi() {
+  return requireCjs('koffi');
+}
+
 let ws = null;
 let _OpenPrinterW, _ClosePrinter, _StartDocPrinterW, _EndDocPrinter;
 let _StartPagePrinter, _EndPagePrinter, _WritePrinter;
@@ -25,14 +32,6 @@ function ensureLoaded() {
   _StartPagePrinter = ws.func('bool StartPagePrinter(void* hPrinter)');
   _EndPagePrinter = ws.func('bool EndPagePrinter(void* hPrinter)');
   _WritePrinter = ws.func('bool WritePrinter(void* hPrinter, uint8_t* pBuf, uint32 cbBuf, void* pcWritten)');
-}
-
-// koffi é CommonJS; import dinâmico compatível com ESM
-function require_koffi() {
-  // eslint-disable-next-line global-require
-  const { createRequire } = require('node:module');
-  const require = createRequire(import.meta.url);
-  return require('koffi');
 }
 
 // printerName: nome da impressora no Windows, ou caminho de
