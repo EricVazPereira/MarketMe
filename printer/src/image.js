@@ -155,6 +155,7 @@ export async function composeHeader({ logoBase64, lines, width = PAPER_WIDTH_DOT
     try {
       logoImg = await Jimp.read(toBuffer(logoBase64));
       logoColW = 130;
+      console.log(`[logo] carregada: ${logoImg.bitmap.width}x${logoImg.bitmap.height}, alpha=${logoImg.hasAlpha()}`);
     } catch (err) {
       console.error('Logo inválida no cabeçalho, montando só com texto:', err.message);
     }
@@ -168,12 +169,20 @@ export async function composeHeader({ logoBase64, lines, width = PAPER_WIDTH_DOT
   if (logoImg) {
     const fitted = fitBox(logoImg.bitmap.width, logoImg.bitmap.height, logoColW, Math.max(estHeight, 80));
     logoImg.resize({ w: fitted.w, h: fitted.h });
+    // achata sobre um fundo branco opaco ANTES de binarizar — se a
+    // logo tiver canal alfa (fundo transparente, PNG), isso evita
+    // qualquer ambiguidade de como o alfa interage com o threshold.
+    const logoChapada = new Jimp({ width: fitted.w, height: fitted.h, color: 0xffffffff });
+    logoChapada.composite(logoImg, 0, 0);
     // binariza a logo no threshold de foto/logo (mais permissivo com
-    // tons médios) ANTES de compor — assim tons claros da logo não
-    // somem quando o canvas inteiro é rebinarizado no threshold do
-    // texto (mais agressivo, ajustado pra traços finos de fonte).
-    binarize(logoImg, 150);
+    // tons médios) ANTES de compor com o texto — assim tons claros da
+    // logo não somem quando o canvas inteiro é rebinarizado no
+    // threshold do texto (mais agressivo, ajustado pra traços finos
+    // de fonte).
+    binarize(logoChapada, 150);
+    logoImg = logoChapada;
     logoH = fitted.h;
+    console.log(`[logo] redimensionada e achatada: ${fitted.w}x${fitted.h}`);
   }
 
   const height = Math.max(estHeight, logoH) + pad;
