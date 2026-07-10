@@ -124,12 +124,18 @@ app.post(`${T}/GravaItens`, (req, res) => {
   res.json(linhas);
 });
 
+// MOCK_FISCAL=1 simula uma resposta com os campos da NFC-e (nNF,
+// nProt, qrCode) — útil pra testar o cupom fiscal fim a fim contra o
+// mock, sem depender do Server ZF real ainda devolver isso.
 app.post(`${T}/FechamentoComandaSmartPDV`, (req, res) => {
   const { barcode } = req.body ?? {};
   if (!state.contas.has(barcode))
     return res.json({ sucess: false, message_sucess: 'Comanda não encontrada' });
   state.contas.delete(barcode);
-  res.json({ sucess: true, id_sucess: 0, message_sucess: 'Comanda Fechada com Sucesso !' });
+  const fiscal = process.env.MOCK_FISCAL === '1'
+    ? { nNF: '000123', nProt: '135260000000123', qrCode: 'https://www.homologacao.nfce.fazenda.sp.gov.br/qrcode?chNFe=mock' }
+    : {};
+  res.json({ sucess: true, id_sucess: 0, message_sucess: 'Comanda Fechada com Sucesso !', ...fiscal });
 });
 
 app.post(`${T}/CancelarItem`, (req, res) => {

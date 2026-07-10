@@ -699,7 +699,7 @@
   // Pede ao servidor de impressão (mesmo host da API, porta 8127) para
   // imprimir o cupom. Opcional: sem cfg.impressora configurado, não faz
   // nada. Falha na impressão nunca desfaz a venda — só avisa o operador.
-  async function imprimirCupom({ linhas, total, cpf }) {
+  async function imprimirCupom({ linhas, total, cpf, fiscal }) {
     if (!cfg.impressora) return;
     const base = printServerUrl();
     if (!base)
@@ -716,6 +716,7 @@
           formaPagamento: FORMA_PAGAMENTO,
           total,
           cpf,
+          fiscal,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -727,6 +728,17 @@
       const msg = e.message === 'Failed to fetch' ? `não respondeu em ${base}` : e.message;
       toast(`⚠️ Cupom não impresso: ${msg}`);
     }
+  }
+
+  // Dados fiscais da NFC-e esperados na resposta do fechamento (tags
+  // do XML gerado pelo sistema fiscal: nNF, nProt, qrCode). Se algum
+  // faltar, o cupom sai NAO FISCAL — nunca inventamos QR/protocolo —
+  // e avisa o operador pra reportar exatamente o que faltou.
+  function extrairFiscal(r) {
+    const presentes = { nNF: r?.nNF, nProt: r?.nProt, qrCode: r?.qrCode };
+    const faltando = Object.entries(presentes).filter(([, v]) => !v).map(([k]) => k);
+    if (faltando.length) return { fiscal: undefined, faltando };
+    return { fiscal: { numeroNfce: r.nNF, protocolo: r.nProt, qrCodeConteudo: r.qrCode }, faltando: [] };
   }
 
   async function renderPayment() {
@@ -759,8 +771,11 @@
         });
         if (r && r.sucess === false)
           return toast(r.message_sucess || 'não foi possível fechar a conta');
-        await imprimirCupom({ linhas, total, cpf });
+        const { fiscal, faltando } = extrairFiscal(r);
+        await imprimirCupom({ linhas, total, cpf, fiscal });
         cfg.conta = { barcode: '', linhas: [], canceladas: [] };
+        if (faltando.length)
+          toast(`⚠️ Cupom saiu NAO FISCAL — API nao retornou: ${faltando.join(', ')}`, 6000);
         renderSuccess(total, r?.message_sucess);
       } catch (e) { toast(`⚠️ ${e.message}`); }
     };

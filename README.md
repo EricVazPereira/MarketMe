@@ -92,14 +92,20 @@ ver abaixo), o cupom continua saindo como antes: **"CUPOM NAO FISCAL —
 COMPROVANTE DE COMPRA"**, sem QR/protocolo, porque imprimir uma seção
 fiscal sem dados reais por trás seria enganoso.
 
-> **Ainda não plugado no app**: o app (`app/www/js/app.js`) hoje não
-> manda `fiscal` pro servidor de impressão — falta a integração com o
-> sistema que devolve os dados da emissão (número da NFC-e, protocolo
-> de autorização, conteúdo do QR) no fechamento da venda, e também com
-> o **QLUB** (formas de pagamento — vai devolver os dados da transação,
-> como NSU/autorização de cartão, que também precisam ir pro cupom).
-> `printer/` já está pronto para receber `fiscal` assim que o app
-> passar a mandar.
+**Já integrado ao app**: `FechamentoComandaSmartPDV` deve devolver os
+campos `nNF`, `nProt` e `qrCode` (mesmos nomes das tags do XML da
+NFC-e — `<nNF>`, `<nProt>`, `<qrCode>`) no JSON de resposta. O app
+(`extrairFiscal()` em `app/www/js/app.js`) lê esses três campos; se
+**algum faltar**, o cupom sai automaticamente como NAO FISCAL (nunca
+inventa QR/protocolo) e mostra um aviso no tablet listando exatamente
+o que faltou — útil pra apontar pro time do Server ZF o que ainda
+precisa ser adicionado na resposta da API. Data/hora impressa é a do
+momento da impressão (não a `dhEmi` do XML); a chave de acesso
+(`chNFe`) não é impressa (não aparece no cupom de referência).
+
+> **Ainda falta**: integração com o **QLUB** (formas de pagamento) —
+> quando integrado, vai devolver dados da transação (NSU, autorização
+> de cartão) que também precisam ir pro cupom.
 
 ### Rodando o servidor de impressão
 
@@ -142,6 +148,11 @@ que o `npm start` de `printer/` não está rodando nesse momento na
 máquina do compartilhamento — ele precisa ficar de pé o tempo todo
 (por exemplo, como tarefa agendada/serviço do Windows), não só
 durante o teste.
+
+Use **"Imprimir cupom fiscal de teste"** pra validar o layout fiscal
+(logo+empresa lado a lado, QR+protocolo lado a lado) na impressora de
+verdade — usa a logo e os dados reais da empresa já configurados, mas
+com número da NFC-e/protocolo/QR de exemplo (`POST /teste-fiscal`).
 
 ### Como funciona
 
@@ -192,7 +203,10 @@ node scripts/mock-tsm.js   # mock do Server ZF em http://localhost:8125
 
 O mock (`scripts/mock-tsm.js`) imita todos os endpoints acima com o
 mesmo formato de resposta (inclusive `vl_venda` com vírgula decimal e o
-encadeamento `barcode → ID` do `GravaItens`).
+encadeamento `barcode → ID` do `GravaItens`). `MOCK_FISCAL=1` faz o
+`FechamentoComandaSmartPDV` do mock devolver `nNF`/`nProt`/`qrCode` de
+exemplo, pra testar o fluxo do cupom fiscal fim a fim sem o Server ZF
+real ainda retornar isso.
 
 O diretório `src/` contém o conector Node da fase anterior (acesso
 direto Firebird + Pix próprio). Não é mais usado pelo app; fica como
