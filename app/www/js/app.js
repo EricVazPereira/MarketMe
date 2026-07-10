@@ -735,10 +735,15 @@
   // faltar, o cupom sai NAO FISCAL — nunca inventamos QR/protocolo —
   // e avisa o operador pra reportar exatamente o que faltou.
   function extrairFiscal(r) {
-    const presentes = { nNF: r?.nNF, nProt: r?.nProt, qrCode: r?.qrCode };
+    const presentes = {
+      nr_nfce: r?.nr_nfce, nr_protocolo_nfce: r?.nr_protocolo_nfce, url_qrcode: r?.url_qrcode,
+    };
     const faltando = Object.entries(presentes).filter(([, v]) => !v).map(([k]) => k);
     if (faltando.length) return { fiscal: undefined, faltando };
-    return { fiscal: { numeroNfce: r.nNF, protocolo: r.nProt, qrCodeConteudo: r.qrCode }, faltando: [] };
+    return {
+      fiscal: { numeroNfce: r.nr_nfce, protocolo: r.nr_protocolo_nfce, qrCodeConteudo: r.url_qrcode },
+      faltando: [],
+    };
   }
 
   async function renderPayment() {

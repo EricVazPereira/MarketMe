@@ -92,16 +92,21 @@ ver abaixo), o cupom continua saindo como antes: **"CUPOM NAO FISCAL —
 COMPROVANTE DE COMPRA"**, sem QR/protocolo, porque imprimir uma seção
 fiscal sem dados reais por trás seria enganoso.
 
-**Já integrado ao app**: `FechamentoComandaSmartPDV` deve devolver os
-campos `nNF`, `nProt` e `qrCode` (mesmos nomes das tags do XML da
-NFC-e — `<nNF>`, `<nProt>`, `<qrCode>`) no JSON de resposta. O app
-(`extrairFiscal()` em `app/www/js/app.js`) lê esses três campos; se
-**algum faltar**, o cupom sai automaticamente como NAO FISCAL (nunca
-inventa QR/protocolo) e mostra um aviso no tablet listando exatamente
-o que faltou — útil pra apontar pro time do Server ZF o que ainda
-precisa ser adicionado na resposta da API. Data/hora impressa é a do
-momento da impressão (não a `dhEmi` do XML); a chave de acesso
-(`chNFe`) não é impressa (não aparece no cupom de referência).
+**Já integrado ao app**: `FechamentoComandaSmartPDV` já devolve os
+campos prontos no JSON de resposta (o ERP extrai do XML da NFC-e do
+lado dele — o app não faz parsing de XML nenhum):
+
+- `nr_nfce` — número da NFC-e
+- `nr_protocolo_nfce` — protocolo de autorização
+- `url_qrcode` — conteúdo do QR Code
+- `chave_acesso_comanda` — chave de acesso (recebida, mas não impressa)
+
+O app (`extrairFiscal()` em `app/www/js/app.js`) lê os três primeiros
+campos; se **algum faltar**, o cupom sai automaticamente como NAO
+FISCAL (nunca inventa QR/protocolo) e mostra um aviso no tablet
+listando exatamente o que faltou. Data/hora impressa é a do momento
+da impressão (não vem do XML); a chave de acesso não é impressa (não
+aparece no cupom de referência).
 
 > **Ainda falta**: integração com o **QLUB** (formas de pagamento) —
 > quando integrado, vai devolver dados da transação (NSU, autorização
@@ -204,9 +209,9 @@ node scripts/mock-tsm.js   # mock do Server ZF em http://localhost:8125
 O mock (`scripts/mock-tsm.js`) imita todos os endpoints acima com o
 mesmo formato de resposta (inclusive `vl_venda` com vírgula decimal e o
 encadeamento `barcode → ID` do `GravaItens`). `MOCK_FISCAL=1` faz o
-`FechamentoComandaSmartPDV` do mock devolver `nNF`/`nProt`/`qrCode` de
-exemplo, pra testar o fluxo do cupom fiscal fim a fim sem o Server ZF
-real ainda retornar isso.
+`FechamentoComandaSmartPDV` do mock devolver
+`nr_nfce`/`nr_protocolo_nfce`/`url_qrcode` de exemplo, pra testar o
+fluxo do cupom fiscal fim a fim sem depender do Server ZF real.
 
 O diretório `src/` contém o conector Node da fase anterior (acesso
 direto Firebird + Pix próprio). Não é mais usado pelo app; fica como
