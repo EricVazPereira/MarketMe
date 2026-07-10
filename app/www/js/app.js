@@ -394,6 +394,8 @@
           <input id="in-logo" type="file" accept="image/*" class="grow">
         </div>
         <button id="btn-logo-remove" class="link ${cfg.logo ? '' : 'hidden'}" style="width:100%">Remover logo</button>
+        <button id="btn-test-fiscal" class="secondary" style="margin-top:8px">Imprimir cupom fiscal de teste</button>
+        <p class="muted" style="margin-top:4px">Layout do cupom fiscal com número/protocolo/QR de exemplo — só pra conferir o visual na impressora antes da emissão de verdade.</p>
         <label>Balança integrada (etiqueta com peso no código de barras)</label>
         <select id="in-scale">
           <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
@@ -464,6 +466,34 @@
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `respondeu ${res.status}`);
         toast(`✔ Página de teste enviada para ${cfg.impressora}`);
+      } catch (e) {
+        const msg = e.message === 'Failed to fetch' ? `não respondeu em ${base}` : e.message;
+        toast(`⚠️ Não imprimiu: ${msg}`);
+      }
+    };
+    // Cupom fiscal de exemplo: mesmo layout que sairá de verdade
+    // (logo + dados da empresa), mas com número/protocolo/QR de teste
+    // — dá pra conferir o visual na impressora sem depender ainda dos
+    // dados reais da emissão da NFC-e.
+    $('#btn-test-fiscal').onclick = async () => {
+      saveFields();
+      if (!cfg.impressora) return toast('Informe o caminho da impressora primeiro');
+      const base = printServerUrl();
+      if (!base)
+        return toast('Caminho inválido — use um endereço de rede, ex.: \\\\eric\\cupom');
+      try {
+        const res = await fetch(`${base}/teste-fiscal`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            printerPath: cfg.impressora,
+            empresa: cfg.empresaDados,
+            logoBase64: cfg.logo || undefined,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `respondeu ${res.status}`);
+        toast(`✔ Cupom fiscal de teste enviado para ${cfg.impressora}`);
       } catch (e) {
         const msg = e.message === 'Failed to fetch' ? `não respondeu em ${base}` : e.message;
         toast(`⚠️ Não imprimiu: ${msg}`);

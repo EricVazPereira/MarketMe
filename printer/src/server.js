@@ -68,6 +68,30 @@ app.post('/teste', async (req, res) => {
   await enviarParaImpressora(res, printerPath, buffer, 'teste');
 });
 
+// Imprime um cupom FISCAL de exemplo (dados reais da empresa/logo, mas
+// item e número/protocolo/QR de teste) — pra validar o layout na
+// impressora de verdade antes da integração com os dados reais da
+// NFC-e (número, protocolo e QR ainda dependem do XML gerado no
+// fechamento da venda, que o app ainda não capta).
+app.post('/teste-fiscal', async (req, res) => {
+  const { printerPath, empresa, logoBase64 } = req.body ?? {};
+  if (!printerPath) return res.status(400).json({ error: 'printerPath é obrigatório' });
+  const buffer = await buildCupom({
+    empresa,
+    itens: [{ id: '904329', name: 'PRODUTO DE TESTE', amount: '1', unit_price: 1, total_price: 1, unidade: 'UN' }],
+    formaPagamento: 'PIX',
+    total: 1,
+    logoBase64,
+    fiscal: {
+      numeroNfce: '000001',
+      protocolo: '000000000000000',
+      qrCodeConteudo: 'https://www.nfce.fazenda.sp.gov.br/qrcode?chNFe=teste-marketme',
+    },
+    dataHora: new Date(),
+  });
+  await enviarParaImpressora(res, printerPath, buffer, 'teste-fiscal');
+});
+
 app.listen(PORT, () => {
   console.log(`Servidor de impressão MarketMe em http://localhost:${PORT}${DRY_RUN ? ' (modo dry-run)' : ''}`);
 });
