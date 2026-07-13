@@ -140,20 +140,21 @@ test('sem `fiscal`, cupom continua NAO FISCAL (sem regressão)', async () => {
   assert.ok(!texto.includes('[DEBUG]')); // sem fiscalDebug, não imprime a linha de diagnóstico
 });
 
-test('fiscalDebug imprime no cupom quais campos a API não devolveu', async () => {
+test('fiscalDebug imprime no cupom quais campos a API não devolveu, e o JSON bruto', async () => {
   const buf = await buildCupom({
     empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
-    fiscalDebug: ['nr_nfce', 'url_qrcode'],
+    fiscalDebug: { faltando: ['nr_nfce', 'url_qrcode'], raw: '{"sucess":true,"nr_protocolo_nfce":"123"}' },
   });
   const texto = buf.toString('latin1');
   assert.ok(texto.includes('CUPOM NAO FISCAL'));
   assert.ok(texto.includes('[DEBUG] API sem: nr_nfce, url_qrcode'));
+  assert.ok(texto.includes('[DEBUG] JSON: {"sucess":true,"nr_protocolo_nfce":"123"}'));
 });
 
 test('fiscalDebug é ignorado quando o cupom já sai fiscal', async () => {
   const buf = await buildCupom({
     empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
-    fiscal: FISCAL, fiscalDebug: ['nr_nfce'],
+    fiscal: FISCAL, fiscalDebug: { faltando: ['nr_nfce'] },
   });
   assert.ok(!buf.toString('latin1').includes('[DEBUG]'));
 });

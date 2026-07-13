@@ -85,6 +85,10 @@
   }
 
   // ---------- API DataSnap ----------
+  // Guarda a última resposta EXATAMENTE como recebida (antes de
+  // desembrulhar result[0]) — usada só pra diagnóstico impresso no
+  // cupom quando os campos fiscais não vêm (ver extrairFiscal/fiscalDebug).
+  let ultimaRespostaBruta = '';
   async function tsm(method, path, body) {
     if (!cfg.apiUrl) throw new Error('configure o endereço da API');
     const headers = {};
@@ -109,6 +113,7 @@
       );
     if (!res.ok) throw new Error(`API respondeu ${res.status} em ${path}`);
     let data = await res.json().catch(() => ({}));
+    ultimaRespostaBruta = JSON.stringify(data);
     // DataSnap clássico embrulha o retorno em {"result":[...]}
     if (data && data.result && Array.isArray(data.result) && data.result.length === 1)
       data = data.result[0];
@@ -731,10 +736,11 @@
     }
   }
 
-  // Dados fiscais da NFC-e esperados na resposta do fechamento (tags
-  // do XML gerado pelo sistema fiscal: nNF, nProt, qrCode). Se algum
-  // faltar, o cupom sai NAO FISCAL — nunca inventamos QR/protocolo —
-  // e avisa o operador pra reportar exatamente o que faltou.
+  // Dados fiscais da NFC-e esperados na resposta do fechamento
+  // (nr_nfce, nr_protocolo_nfce, url_qrcode — o ERP já devolve prontos,
+  // sem precisar de parsing de XML). Se algum faltar, o cupom sai NAO
+  // FISCAL — nunca inventamos QR/protocolo — e avisa o operador pra
+  // reportar exatamente o que faltou.
   function extrairFiscal(r) {
     const presentes = {
       nr_nfce: r?.nr_nfce, nr_protocolo_nfce: r?.nr_protocolo_nfce, url_qrcode: r?.url_qrcode,
@@ -778,7 +784,8 @@
         if (r && r.sucess === false)
           return toast(r.message_sucess || 'não foi possível fechar a conta');
         const { fiscal, faltando } = extrairFiscal(r);
-        await imprimirCupom({ linhas, total, cpf, fiscal, fiscalDebug: faltando });
+        const fiscalDebug = faltando.length ? { faltando, raw: ultimaRespostaBruta } : undefined;
+        await imprimirCupom({ linhas, total, cpf, fiscal, fiscalDebug });
         cfg.conta = { barcode: '', linhas: [], canceladas: [] };
         if (faltando.length)
           toast(`⚠️ Cupom saiu NAO FISCAL — API nao retornou: ${faltando.join(', ')}`, 6000);

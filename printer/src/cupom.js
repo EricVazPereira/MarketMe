@@ -135,8 +135,13 @@ export async function buildCupom({
     // Diagnóstico impresso (não é dado fiscal, é só pra quem está
     // testando ver na hora por que não saiu fiscal, sem depender de
     // notar o aviso na tela do tablet): lista os campos que a API não
-    // devolveu.
-    if (fiscalDebug?.length) chunks.push(t(`[DEBUG] API sem: ${fiscalDebug.join(', ')}`));
+    // devolveu, e o JSON bruto da resposta (antes de desembrulhar
+    // result[0]) — dá pra ver se é nome de campo errado, campo dentro
+    // de um wrapper diferente, ou o ERP mesmo não gerou a NFC-e.
+    if (fiscalDebug?.faltando?.length) {
+      chunks.push(t(`[DEBUG] API sem: ${fiscalDebug.faltando.join(', ')}`));
+      if (fiscalDebug.raw) chunks.push(t(`[DEBUG] JSON: ${fiscalDebug.raw}`));
+    }
   }
   chunks.push(t(''));
 
