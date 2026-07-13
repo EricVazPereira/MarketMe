@@ -1,0 +1,9 @@
+{
+  "name": "marketme-app",
+  "version": "0.1.0",
+  "description": "MarketMe — app do cliente (scan & pay) empacotado como APK Android",
+  "private": true,
+  "scripts": {
+    "build:apk": "bash android/build.sh"
+  }
+}

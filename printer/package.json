@@ -1,0 +1,23 @@
+{
+  "name": "marketme-printer",
+  "version": "0.1.0",
+  "description": "MarketMe — servidor de impressão de cupom (ESC/POS via WinSpool, roda no PC com a impressora)",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.22.2",
+    "jimp": "^1.6.1",
+    "qrcode": "^1.5.4"
+  },
+  "optionalDependencies": {
+    "koffi": "^2.16.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
