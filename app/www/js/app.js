@@ -44,6 +44,10 @@
     set logo(v) { v ? localStorage.setItem('mm.logo', v) : localStorage.removeItem('mm.logo'); },
     get scale() { return localStorage.getItem('mm.scale') === '1'; },
     set scale(v) { localStorage.setItem('mm.scale', v ? '1' : '0'); },
+    // se "Não", o cupom sempre sai NAO FISCAL — ignora nr_nfce/
+    // nr_protocolo_nfce/url_qrcode mesmo que a API devolva
+    get gerarCupomFiscal() { return localStorage.getItem('mm.gerarCupomFiscal') !== '0'; },
+    set gerarCupomFiscal(v) { localStorage.setItem('mm.gerarCupomFiscal', v ? '1' : '0'); },
     get conta() {
       try {
         const c = JSON.parse(localStorage.getItem('mm.conta')) || {};
@@ -401,6 +405,11 @@
         <button id="btn-logo-remove" class="link ${cfg.logo ? '' : 'hidden'}" style="width:100%">Remover logo</button>
         <button id="btn-test-fiscal" class="secondary" style="margin-top:8px">Imprimir cupom fiscal de teste</button>
         <p class="muted" style="margin-top:4px">Layout do cupom fiscal com número/protocolo/QR de exemplo — só pra conferir o visual na impressora antes da emissão de verdade.</p>
+        <label>Gerar cupom fiscal</label>
+        <select id="in-gerar-fiscal">
+          <option value="1" ${cfg.gerarCupomFiscal ? 'selected' : ''}>Sim</option>
+          <option value="0" ${cfg.gerarCupomFiscal ? '' : 'selected'}>Não — só fecha a conta, sem NFC-e</option>
+        </select>
         <label>Balança integrada (etiqueta com peso no código de barras)</label>
         <select id="in-scale">
           <option value="0" ${cfg.scale ? '' : 'selected'}>Não — pedir o peso na tela</option>
@@ -418,6 +427,7 @@
       cfg.apiPass = $('#in-api-pass').value;
       cfg.estacao = $('#in-estacao').value.trim() || 'DEVELOP';
       cfg.impressora = $('#in-impressora').value.trim();
+      cfg.gerarCupomFiscal = $('#in-gerar-fiscal').value === '1';
       cfg.scale = $('#in-scale').value === '1';
     };
     $('#in-logo').onchange = () => {
@@ -783,9 +793,13 @@
         });
         if (r && r.sucess === false)
           return toast(r.message_sucess || 'não foi possível fechar a conta');
-        const { fiscal, faltando } = extrairFiscal(r);
+        // "Gerar cupom fiscal: Não" ignora o que a API devolveu — o
+        // cupom sai sempre NAO FISCAL, sem checar/avisar sobre campos
+        // faltando (o operador desligou de propósito).
+        const { fiscal: fiscalDaApi, faltando } = cfg.gerarCupomFiscal
+          ? extrairFiscal(r) : { fiscal: undefined, faltando: [] };
         const fiscalDebug = faltando.length ? { faltando, raw: ultimaRespostaBruta } : undefined;
-        await imprimirCupom({ linhas, total, cpf, fiscal, fiscalDebug });
+        await imprimirCupom({ linhas, total, cpf, fiscal: fiscalDaApi, fiscalDebug });
         cfg.conta = { barcode: '', linhas: [], canceladas: [] };
         if (faltando.length)
           toast(`⚠️ Cupom saiu NAO FISCAL — API nao retornou: ${faltando.join(', ')}`, 6000);

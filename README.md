@@ -104,9 +104,16 @@ lado dele — o app não faz parsing de XML nenhum):
 O app (`extrairFiscal()` em `app/www/js/app.js`) lê os três primeiros
 campos; se **algum faltar**, o cupom sai automaticamente como NAO
 FISCAL (nunca inventa QR/protocolo) e mostra um aviso no tablet
-listando exatamente o que faltou. Data/hora impressa é a do momento
-da impressão (não vem do XML); a chave de acesso não é impressa (não
-aparece no cupom de referência).
+listando exatamente o que faltou — se ainda faltar algo, o próprio
+cupom imprime uma linha `[DEBUG] JSON: ...` com a resposta bruta da
+API, pra facilitar o diagnóstico sem precisar de acesso ao console.
+Data/hora impressa é a do momento da impressão (não vem do XML); a
+chave de acesso não é impressa (não aparece no cupom de referência).
+
+Em Configurações, **"Gerar cupom fiscal": Não** faz o cupom sair
+sempre NAO FISCAL, ignorando o que a API devolveu — útil pra testar
+sem depender da emissão fiscal, ou em terminais que não devem emitir
+NFC-e ainda.
 
 > **Ainda falta**: integração com o **QLUB** (formas de pagamento) —
 > quando integrado, vai devolver dados da transação (NSU, autorização

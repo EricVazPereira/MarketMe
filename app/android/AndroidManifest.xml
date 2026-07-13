@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="br.com.marketme.app"
-    android:versionCode="26"
-    android:versionName="0.8.3">
+    android:versionCode="27"
+    android:versionName="0.9.0">
 
     <!-- targetSdk 35 (Android 15): evita o aviso de "app feito para versão
          antiga / sem proteções de privacidade" na instalação. O app cumpre
