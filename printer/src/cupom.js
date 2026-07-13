@@ -73,7 +73,7 @@ function formatQtd(qty, unidade) {
  * @param {string} [p.fiscal.qrCodeConteudo] - conteúdo/URL do QR Code da NFC-e
  */
 export async function buildCupom({
-  empresa, itens, formaPagamento, total, cpf, logoBase64, dataHora = new Date(), fiscal,
+  empresa, itens, formaPagamento, total, cpf, logoBase64, dataHora = new Date(), fiscal, fiscalDebug,
 }) {
   const chunks = [CMD.INIT, CMD.FONT_B, CMD.LINE_SPACING_TIGHT];
   const nome = empresa?.['Nome Fantasia'] || empresa?.['Razao Social'] || '';
@@ -132,6 +132,11 @@ export async function buildCupom({
     chunks.push(CMD.BOLD_ON, t('CUPOM FISCAL ELETRONICO - NFC-e'), CMD.BOLD_OFF);
   } else {
     chunks.push(CMD.BOLD_ON, t('CUPOM NAO FISCAL'), t('COMPROVANTE DE COMPRA'), CMD.BOLD_OFF);
+    // Diagnóstico impresso (não é dado fiscal, é só pra quem está
+    // testando ver na hora por que não saiu fiscal, sem depender de
+    // notar o aviso na tela do tablet): lista os campos que a API não
+    // devolveu.
+    if (fiscalDebug?.length) chunks.push(t(`[DEBUG] API sem: ${fiscalDebug.join(', ')}`));
   }
   chunks.push(t(''));
 

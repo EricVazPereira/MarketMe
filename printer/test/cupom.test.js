@@ -137,6 +137,25 @@ test('sem `fiscal`, cupom continua NAO FISCAL (sem regressão)', async () => {
   assert.ok(texto.includes('CUPOM NAO FISCAL'));
   assert.ok(!texto.includes('NFC-e'));
   assert.ok(!texto.includes('CONSUMIDOR NAO IDENTIFICADO'));
+  assert.ok(!texto.includes('[DEBUG]')); // sem fiscalDebug, não imprime a linha de diagnóstico
+});
+
+test('fiscalDebug imprime no cupom quais campos a API não devolveu', async () => {
+  const buf = await buildCupom({
+    empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
+    fiscalDebug: ['nr_nfce', 'url_qrcode'],
+  });
+  const texto = buf.toString('latin1');
+  assert.ok(texto.includes('CUPOM NAO FISCAL'));
+  assert.ok(texto.includes('[DEBUG] API sem: nr_nfce, url_qrcode'));
+});
+
+test('fiscalDebug é ignorado quando o cupom já sai fiscal', async () => {
+  const buf = await buildCupom({
+    empresa: EMPRESA, itens: ITENS, formaPagamento: 'PIX', total: 17.98,
+    fiscal: FISCAL, fiscalDebug: ['nr_nfce'],
+  });
+  assert.ok(!buf.toString('latin1').includes('[DEBUG]'));
 });
 
 test('com `fiscal` + logo, monta cabeçalho e rodapé compostos (lado a lado)', async () => {

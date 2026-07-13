@@ -699,7 +699,7 @@
   // Pede ao servidor de impressão (mesmo host da API, porta 8127) para
   // imprimir o cupom. Opcional: sem cfg.impressora configurado, não faz
   // nada. Falha na impressão nunca desfaz a venda — só avisa o operador.
-  async function imprimirCupom({ linhas, total, cpf, fiscal }) {
+  async function imprimirCupom({ linhas, total, cpf, fiscal, fiscalDebug }) {
     if (!cfg.impressora) return;
     const base = printServerUrl();
     if (!base)
@@ -717,6 +717,7 @@
           total,
           cpf,
           fiscal,
+          fiscalDebug,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -777,7 +778,7 @@
         if (r && r.sucess === false)
           return toast(r.message_sucess || 'não foi possível fechar a conta');
         const { fiscal, faltando } = extrairFiscal(r);
-        await imprimirCupom({ linhas, total, cpf, fiscal });
+        await imprimirCupom({ linhas, total, cpf, fiscal, fiscalDebug: faltando });
         cfg.conta = { barcode: '', linhas: [], canceladas: [] };
         if (faltando.length)
           toast(`⚠️ Cupom saiu NAO FISCAL — API nao retornou: ${faltando.join(', ')}`, 6000);
